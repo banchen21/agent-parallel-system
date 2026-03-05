@@ -31,7 +31,7 @@ impl PasswordHasherUtil {
         
         let password_hash = argon2
             .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| AppError::InternalServerError)?
+            .map_err(|_e| AppError::InternalServerError)?
             .to_string();
         
         Ok(password_hash)
@@ -40,7 +40,7 @@ impl PasswordHasherUtil {
     /// 验证密码
     pub fn verify_password(password: &str, hash: &str) -> Result<bool, AppError> {
         let parsed_hash = PasswordHash::new(hash)
-            .map_err(|e| AppError::InternalServerError)?;
+            .map_err(|_e| AppError::InternalServerError)?;
         
         let result = Argon2::default()
             .verify_password(password.as_bytes(), &parsed_hash)

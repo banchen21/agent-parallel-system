@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{
     core::errors::AppError,
     models::agent::{
-        Agent, RegisterAgentRequest, AgentHeartbeatRequest, AgentResponse, AgentStatus,
+        Agent, RegisterAgentRequest, AgentHeartbeatRequest, AgentStatus,
         AgentHealthStatus, TaskAssignmentRequest, TaskAssignmentResponse,
     },
 };
@@ -116,7 +116,7 @@ impl AgentService {
         .fetch_optional(&self.db_pool)
         .await?;
         
-        let agent = agent.ok_or_else(|| AppError::NotFound("智能体不存在".to_string()))?;
+        let _agent = agent.ok_or_else(|| AppError::NotFound("智能体不存在".to_string()))?;
         
         // 构建健康状态响应
         let health_status = AgentHealthStatus {
@@ -136,14 +136,34 @@ impl AgentService {
         Ok(health_status)
     }
     
+    /// 获取所有智能体（不过滤状态）
+    pub async fn get_all_agents(
+        &self,
+        capabilities: Option<Vec<String>>,
+    ) -> Result<Vec<Agent>, AppError> {
+        let mut query = "SELECT * FROM agents WHERE 1=1".to_string();
+        
+        if let Some(caps) = capabilities {
+            query.push_str(&format!(" AND capabilities::text LIKE '%{}%'", caps.join("%")));
+        }
+        
+        query.push_str(" ORDER BY created_at DESC");
+        
+        let agents = sqlx::query_as::<_, Agent>(&query)
+            .fetch_all(&self.db_pool)
+            .await?;
+        
+        Ok(agents)
+    }
+
     /// 获取所有可用智能体
     pub async fn get_available_agents(
         &self,
         capabilities: Option<Vec<String>>,
     ) -> Result<Vec<Agent>, AppError> {
         let mut query = "
-            SELECT * FROM agents 
-            WHERE status = 'online' 
+            SELECT * FROM agents
+            WHERE status = 'online'
             AND current_load < max_concurrent_tasks
             AND last_heartbeat > NOW() - INTERVAL '5 minutes'
         ".to_string();

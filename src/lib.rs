@@ -11,6 +11,9 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use bb8_redis::RedisConnectionManager;
 
+// 暂时注释以绕过Rust 1.93.1编译器bug
+// use crate::core::realtime_logging::RealtimeLogManager;
+
 use crate::{
     services::{
         auth_service::AuthService,
@@ -33,6 +36,7 @@ pub struct AppState {
     pub orchestrator_service: Arc<OrchestratorService>,
     pub workflow_service: Arc<WorkflowService>,
     pub message_service: Arc<MessageService>,
+    // pub realtime_log_manager: Option<Arc<RealtimeLogManager>>,
     pub db_pool: PgPool,
     pub redis_pool: bb8::Pool<RedisConnectionManager>,
 }
@@ -58,8 +62,15 @@ impl AppState {
             orchestrator_service,
             workflow_service,
             message_service,
+            // realtime_log_manager: None,
             db_pool,
             redis_pool,
         }
     }
+
+    // /// 设置实时日志管理器
+    // pub fn with_realtime_log_manager(mut self, manager: Arc<RealtimeLogManager>) -> Self {
+    //     self.realtime_log_manager = Some(manager);
+    //     self
+    // }
 }

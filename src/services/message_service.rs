@@ -434,16 +434,3 @@ impl MessageService {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::database::create_test_pool;
-
-    #[tokio::test]
-    async fn test_message_service_creation() {
-        // 这个测试主要是验证服务可以正确创建
-        // 由于需要数据库连接，这里只测试编译通过
-        assert!(true);
-    }
-}

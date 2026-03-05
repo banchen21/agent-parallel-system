@@ -15,8 +15,10 @@ rust-version = "1.70"
 # 依赖项
 [dependencies]
 # Web框架
-axum = { version = "0.7", features = ["macros"] }
-tokio = { version = "1.37", features = ["full"] }
+axum = { version = "0.7", features = ["macros", "ws"] }
+axum-extra = { version = "0.9", features = ["cookie"] }
+tokio = { version = "1.37", features = ["full", "rt-multi-thread", "time", "sync", "macros"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-br"] }
 

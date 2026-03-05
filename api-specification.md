@@ -204,6 +204,23 @@ Token 获取流程：
 - `limit`（可选）
 - `offset`（可选）
 
+### 6.8 实时日志 Realtime Logs
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/logs/sse` | 是 | SSE实时日志流 |
+| GET | `/logs/websocket` | 是 | WebSocket实时日志 |
+| GET | `/logs/stats` | 是 | 实时日志统计 |
+
+SSE/WebSocket日志过滤器参数：
+
+- `level`（可选）：日志级别过滤，如 `["info", "warn"]`
+- `target`（可选）：日志目标模块过滤
+- `workspace_id`（可选）：工作空间ID过滤
+- `task_id`（可选）：任务ID过滤
+- `agent_id`（可选）：智能体ID过滤
+- `user_id`（可选）：用户ID过滤
+
 ## 7. 关键请求示例
 
 ### 7.1 注册与登录

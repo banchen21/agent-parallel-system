@@ -112,7 +112,7 @@ pub fn is_valid_json(json_str: &str) -> bool {
 
 /// 深度合并两个JSON对象
 pub fn deep_merge_json(
-    mut base: serde_json::Value,
+    base: serde_json::Value,
     overlay: serde_json::Value,
 ) -> serde_json::Value {
     match (base, overlay) {

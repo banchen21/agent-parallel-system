@@ -6,7 +6,7 @@ use crate::{
     core::errors::AppError,
     models::workspace::{
         Workspace, CreateWorkspaceRequest, UpdateWorkspaceRequest, WorkspaceResponse,
-        WorkspacePermission, PermissionLevel, GrantPermissionRequest, Document, Tool,
+        WorkspacePermission, GrantPermissionRequest, Document, Tool,
     },
 };
 

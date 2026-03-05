@@ -232,7 +232,7 @@ impl TaskService {
         
         // 检查任务权限
         let task = self.get_task_by_id(task_id, user_id).await?;
-        let task = task.ok_or_else(|| AppError::NotFound("任务不存在".to_string()))?;
+        let _task = task.ok_or_else(|| AppError::NotFound("任务不存在".to_string()))?;
         
         let updated_task = sqlx::query_as!(
             Task,

@@ -121,7 +121,7 @@ pub fn log_api_request(
 ) {
     structured_log!(
         Level::INFO,
-        "API请求: method={} path={} status={} duration_ms={} user_id={} ip={}",
+        "API请求: method={method} path={path} status={status} duration_ms={duration_ms} user_id={user_id} ip={ip}",
         method = method,
         path = path,
         status = status_code,
@@ -142,7 +142,7 @@ pub fn log_task_execution(
     if let Some(err) = error {
         structured_log!(
             Level::ERROR,
-            "任务执行失败: task_id={} action={} status={} duration_ms={} error={}",
+            "任务执行失败: task_id={task_id} action={action} status={status} duration_ms={duration_ms} error={error}",
             task_id = task_id,
             action = action,
             status = status,
@@ -152,7 +152,7 @@ pub fn log_task_execution(
     } else {
         structured_log!(
             Level::INFO,
-            "任务执行: task_id={} action={} status={} duration_ms={}",
+            "任务执行: task_id={task_id} action={action} status={status} duration_ms={duration_ms}",
             task_id = task_id,
             action = action,
             status = status,
@@ -170,7 +170,7 @@ pub fn log_agent_activity(
 ) {
     structured_log!(
         Level::INFO,
-        "智能体活动: agent_id={} action={} task_id={} details={}",
+        "智能体活动: agent_id={agent_id} action={action} task_id={task_id} details={details}",
         agent_id = agent_id,
         action = action,
         task_id = task_id.unwrap_or("none"),
@@ -188,7 +188,7 @@ pub fn log_database_query(
     if let Some(err) = error {
         structured_log!(
             Level::ERROR,
-            "数据库查询失败: query={} duration_ms={} error={}",
+            "数据库查询失败: query={query} duration_ms={duration_ms} error={error}",
             query = query,
             duration_ms = duration_ms,
             error = err
@@ -196,10 +196,11 @@ pub fn log_database_query(
     } else {
         structured_log!(
             Level::DEBUG,
-            "数据库查询: query={} duration_ms={} rows_affected={}",
+            "数据库查询: query={query} duration_ms={duration_ms} rows_affected={rows_affected}",
             query = query,
             duration_ms = duration_ms,
             rows_affected = rows_affected.unwrap_or(0)
         );
     }
 }
+

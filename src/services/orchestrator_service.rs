@@ -1,13 +1,18 @@
-use anyhow::{Context, Result};
+use anyhow::{Result};
 use bb8_redis::RedisConnectionManager;
 use chrono::Utc;
 use sqlx::PgPool;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::{
-    core::errors::AppError,
+    core::{
+        errors::AppError,
+        dag::DagOrchestrator,
+        error_recovery::{ErrorRecoveryManager, RecoveryStrategy},
+    },
     models::{
-        task::{Task, TaskStatus, TaskPriority},
+        task::{Task, TaskStatus},
         agent::Agent,
     },
 };
@@ -17,6 +22,8 @@ use crate::{
 pub struct OrchestratorService {
     db_pool: PgPool,
     redis_pool: bb8::Pool<RedisConnectionManager>,
+    dag_orchestrator: Arc<Mutex<DagOrchestrator>>,
+    error_recovery_manager: Arc<Mutex<ErrorRecoveryManager>>,
 }
 
 impl OrchestratorService {
@@ -24,6 +31,8 @@ impl OrchestratorService {
         Self {
             db_pool,
             redis_pool,
+            dag_orchestrator: Arc::new(Mutex::new(DagOrchestrator::new())),
+            error_recovery_manager: Arc::new(Mutex::new(ErrorRecoveryManager::default())),
         }
     }
     
@@ -186,7 +195,7 @@ impl OrchestratorService {
     async fn select_best_agent<'a>(
         &self,
         agents: Vec<&'a Agent>,
-        task: &Task,
+        _task: &Task,
     ) -> Result<&'a Agent, AppError> {
         // 简单的选择策略：选择负载最低的智能体
         // 在实际应用中，可以考虑更多因素：
@@ -488,5 +497,193 @@ impl OrchestratorService {
         });
         
         Ok(stats_json)
+    }
+
+    // ==================== DAG编排功能 ====================
+
+    /// 使用DAG编排器处理复杂任务依赖
+    pub async fn process_dag_workflow(&self, workflow_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+        // 获取工作流中的所有任务
+        let workflow_tasks = sqlx::query_as!(
+            Task,
+            "SELECT * FROM tasks WHERE workspace_id = $1 ORDER BY created_at ASC",
+            workflow_id
+        )
+        .fetch_all(&self.db_pool)
+        .await?;
+
+        // 获取任务依赖关系
+        let dependencies = sqlx::query!(
+            r#"
+            SELECT task_id, depends_on_task_id, dependency_type
+            FROM task_dependencies
+            WHERE task_id IN (
+                SELECT id FROM tasks WHERE workspace_id = $1
+            )"#,
+            workflow_id
+        )
+        .fetch_all(&self.db_pool)
+        .await?;
+
+        let mut dag = self.dag_orchestrator.lock().unwrap();
+        dag.clear();
+
+        // 添加任务到DAG
+        for task in workflow_tasks {
+            dag.add_task(task);
+        }
+
+        // 添加依赖关系到DAG
+        for dep in dependencies {
+            if let Err(e) = dag.add_dependency(dep.task_id, dep.depends_on_task_id) {
+                tracing::warn!("添加依赖失败: {} -> {}: {}", dep.task_id, dep.depends_on_task_id, e);
+            }
+        }
+
+        // 获取执行顺序
+        let execution_order = dag.get_execution_order()?;
+        
+        // 获取就绪的任务
+        let ready_tasks = dag.get_ready_tasks();
+        
+        tracing::info!(
+            "工作流 {} 的DAG编排完成，执行顺序: {:?}，就绪任务: {:?}",
+            workflow_id,
+            execution_order,
+            ready_tasks
+        );
+
+        Ok(ready_tasks)
+    }
+
+    /// 检查并分配就绪的DAG任务
+    pub async fn assign_ready_dag_tasks(&self, workflow_id: Uuid) -> Result<u64, AppError> {
+        let ready_tasks = self.process_dag_workflow(workflow_id).await?;
+        let mut assigned_count = 0;
+
+        for task_id in ready_tasks {
+            if self.assign_task_to_best_agent(task_id).await? {
+                assigned_count += 1;
+            }
+        }
+
+        tracing::info!("为工作流 {} 分配了 {} 个就绪的DAG任务", workflow_id, assigned_count);
+        Ok(assigned_count)
+    }
+
+    /// 获取DAG编排状态
+    pub async fn get_dag_status(&self, workflow_id: Uuid) -> Result<serde_json::Value, AppError> {
+        let ready_tasks = self.process_dag_workflow(workflow_id).await?;
+        let dag = self.dag_orchestrator.lock().unwrap();
+
+        let execution_order = dag.get_execution_order()?;
+        let critical_path = dag.get_critical_path()?;
+
+        let status = serde_json::json!({
+            "workflow_id": workflow_id,
+            "total_tasks": dag.get_all_tasks().len(),
+            "ready_tasks": ready_tasks,
+            "execution_order": execution_order,
+            "critical_path": critical_path,
+            "has_cycles": execution_order.len() != dag.get_all_tasks().len(),
+        });
+
+        Ok(status)
+    }
+
+    // ==================== 错误恢复功能 ====================
+
+    /// 处理任务失败并应用恢复策略
+    pub async fn handle_task_failure_with_recovery(
+        &self,
+        task_id: Uuid,
+        error: String,
+        error_type: &str,
+    ) -> Result<RecoveryStrategy, AppError> {
+        let mut recovery_manager = self.error_recovery_manager.lock().unwrap();
+
+        // 处理任务失败
+        let strategy = recovery_manager.handle_task_failure(task_id, error, error_type)?;
+
+        // 根据恢复策略执行相应操作
+        match strategy {
+            RecoveryStrategy::ImmediateRetry | RecoveryStrategy::ExponentialBackoff => {
+                let delay = recovery_manager.get_retry_delay(task_id);
+                tracing::info!("任务 {} 将在 {} 秒后重试，策略: {:?}", task_id, delay, strategy);
+                
+                // 在实际应用中，这里可以安排延迟重试
+                // 目前只是记录日志
+            }
+            RecoveryStrategy::RollbackToCheckpoint => {
+                if let Ok(checkpoint) = recovery_manager.rollback_to_checkpoint(task_id) {
+                    tracing::info!("任务 {} 将回滚到检查点: {:?}", task_id, checkpoint);
+                    
+                    // 在实际应用中，这里可以执行回滚操作
+                    // 目前只是记录日志
+                }
+            }
+            RecoveryStrategy::SkipAndContinue => {
+                tracing::warn!("任务 {} 将被跳过，继续执行其他任务", task_id);
+                
+                // 标记任务为跳过状态
+                sqlx::query!(
+                    "UPDATE tasks SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
+                    task_id
+                )
+                .execute(&self.db_pool)
+                .await?;
+            }
+            RecoveryStrategy::StopWorkflow => {
+                tracing::error!("任务 {} 发生致命错误，停止整个工作流", task_id);
+                
+                // 在实际应用中，这里可以停止相关工作流
+                // 目前只是记录日志
+            }
+        }
+
+        Ok(strategy)
+    }
+
+    /// 创建任务检查点
+    pub async fn create_task_checkpoint(&self, task_id: Uuid) -> Result<(), AppError> {
+        let task = sqlx::query_as!(
+            Task,
+            "SELECT * FROM tasks WHERE id = $1",
+            task_id
+        )
+        .fetch_optional(&self.db_pool)
+        .await?;
+
+        if let Some(task) = task {
+            let mut recovery_manager = self.error_recovery_manager.lock().unwrap();
+            recovery_manager.create_checkpoint(&task);
+            tracing::debug!("为任务 {} 创建了检查点", task_id);
+        }
+
+        Ok(())
+    }
+
+    /// 获取任务恢复统计信息
+    pub async fn get_task_recovery_stats(&self, task_id: Uuid) -> Result<serde_json::Value, AppError> {
+        let recovery_manager = self.error_recovery_manager.lock().unwrap();
+        let stats = recovery_manager.get_task_stats(task_id);
+
+        let stats_json = serde_json::json!({
+            "task_id": stats.task_id,
+            "retry_count": stats.retry_count,
+            "error_count": stats.error_count,
+            "checkpoint_count": stats.checkpoint_count,
+            "last_error": stats.last_error,
+        });
+
+        Ok(stats_json)
+    }
+
+    /// 重置任务恢复状态
+    pub async fn reset_task_recovery_state(&self, task_id: Uuid) -> Result<(), AppError> {
+        let mut recovery_manager = self.error_recovery_manager.lock().unwrap();
+        recovery_manager.cleanup_task_history(task_id);
+        tracing::info!("已重置任务 {} 的恢复状态", task_id);
+        Ok(())
     }
 }

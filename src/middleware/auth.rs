@@ -1,6 +1,6 @@
 use axum::{
     extract::{Request, State},
-    http::{header, StatusCode},
+    http::{header},
     middleware::Next,
     response::Response,
 };
@@ -22,7 +22,7 @@ pub struct AuthenticatedUser {
 
 /// 认证中间件
 pub async fn auth_middleware(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -47,7 +47,7 @@ pub async fn auth_middleware(
 
 /// 管理员中间件
 pub async fn admin_middleware(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -139,7 +139,7 @@ pub fn get_authenticated_user(request: &Request) -> Result<AuthenticatedUser, Ap
 
 /// 可选认证中间件（不强制要求认证）
 pub async fn optional_auth_middleware(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     mut request: Request,
     next: Next,
 ) -> Response {
@@ -226,4 +226,23 @@ pub async fn request_log_middleware(
     );
     
     response
+}
+
+/// 认证辅助工具
+pub struct AuthMiddleware;
+
+impl AuthMiddleware {
+    /// 从Cookie中获取用户ID
+    pub fn get_user_id_from_cookies(jar: &axum_extra::extract::CookieJar) -> Result<Uuid, AppError> {
+        // 尝试从Cookie中获取token
+        let token = jar
+            .get("token")
+            .or_else(|| jar.get("access_token"))
+            .ok_or_else(|| AppError::AuthenticationError("未找到认证Cookie".to_string()))?
+            .value();
+        
+        // 验证token并提取用户ID
+        let claims = validate_token(token)?;
+        Ok(claims.sub)
+    }
 }

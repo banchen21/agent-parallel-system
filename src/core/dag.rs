@@ -108,7 +108,7 @@ impl DagOrchestrator {
 
     /// 检查任务是否就绪（所有依赖都已完成）
     pub fn is_task_ready(&self, task_id: Uuid) -> Result<bool, AppError> {
-        let task = self.tasks.get(&task_id)
+        let _task = self.tasks.get(&task_id)
             .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", task_id)))?;
 
         // 如果没有依赖，任务就是就绪的
