@@ -2,7 +2,20 @@
 
 一个使用Rust构建的高性能、可扩展的多智能体并行协作系统，支持LLM集成、任务编排和实时通信。
 
-## 功能特性
+> **项目状态**: 开发中 (完成度约 35-45%)
+> 
+> 当前处于从"核心算法原型"向"完整工具软件"转化的关键阶段
+
+## 项目完成度概览
+
+| 模块 | 完成度 | 状态描述 |
+|------|--------|----------|
+| 核心后端逻辑 | 70% | 并行架构、任务分发、状态管理已实现 |
+| 接口适配层 | 20% | API骨架已建立，实时通信待完善 |
+| 前端界面 | 15% | 静态原型完成，数据绑定待实现 |
+| 数据持久化 | 5% | 内存模式运行，数据库集成待开发 |
+
+## 功能特性 (规划中)
 
 - 🚀 **高性能架构**: 使用Rust和异步编程构建
 - 🤖 **多智能体协作**: 支持多个智能体并行处理任务
@@ -11,17 +24,15 @@
 - 📊 **实时监控**: 完整的监控和日志系统
 - 🔒 **安全认证**: JWT认证和权限管理
 - 🐳 **容器化部署**: 支持Docker和Docker Compose
-- 📈 **水平扩展**: 支持多实例部署和负载均衡
 
 ## 技术栈
 
 - **后端**: Rust + Axum
-- **数据库**: PostgreSQL 15
-- **缓存/消息队列**: Redis 7
-- **认证**: JWT + Argon2/Bcrypt
+- **数据库**: PostgreSQL 15 (规划中)
+- **缓存/消息队列**: Redis 7 (规划中)
+- **认证**: JWT + Argon2/Bcrypt (规划中)
 - **部署**: Docker + Docker Compose
 - **监控**: 结构化日志 + 健康检查
-- **序列化**: Serde + JSON
 
 ## 快速开始
 
@@ -53,7 +64,6 @@ cp .env.example .env
 - API服务: http://localhost:8000
 - API文档: http://localhost:8000/docs
 - 健康检查: http://localhost:8000/health
-- 就绪检查: http://localhost:8000/ready
 
 ### 手动启动
 
@@ -96,7 +106,7 @@ agent-parallel-system/
 └── Cargo.toml            # Rust依赖配置
 ```
 
-## API接口
+## API接口 (开发中)
 
 ### API文档
 
@@ -105,7 +115,7 @@ agent-parallel-system/
 - **机器可读接口**: http://localhost:8000/ui/spec
 - **接口列表**: http://localhost:8000/ui/endpoints
 
-### 接口总览
+### 接口总览 (规划中)
 
 #### 系统与文档
 - `GET /health` - 健康检查
@@ -175,14 +185,6 @@ agent-parallel-system/
 - `POST /messages/{message_type}/delete-batch` - 批量删除
 - `POST /messages/broadcast` - 发送系统广播
 
-### 快速测试
-
-使用内置测试工具验证API功能：
-
-```bash
-python3 scripts/api_test_tool.py --base-url http://127.0.0.1:8000/api/v1 --timeout 15
-```
-
 ## 开发指南
 
 ### 本地开发环境
@@ -242,32 +244,22 @@ cargo build --release
 docker build -t agent-parallel-system .
 ```
 
-## 部署
+## 开发路线图
 
-### 生产环境部署
+### 高优先级
+- [ ] 打通前后端数据绑定
+- [ ] 实现实时日志推送 (SSE/WebSocket)
+- [ ] 完善任务创建功能
 
-1. 配置生产环境变量
-```bash
-cp .env.example .env.production
-# 编辑生产环境配置
-```
+### 中优先级
+- [ ] 实现复杂的依赖编排 (DAG)
+- [ ] 添加鲁棒的错误恢复机制
+- [ ] 实现身份校验和权限控制
 
-2. 构建和部署
-```bash
-# 使用Docker Compose
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-
-# 或者使用Kubernetes
-kubectl apply -f k8s/
-```
-
-### 监控和日志
-
-系统集成了完整的监控和日志功能：
-
-- **健康检查**: 自动健康检查和就绪检查
-- **结构化日志**: JSON格式日志输出
-- **性能监控**: 内置性能指标收集
+### 低优先级
+- [ ] 数据库集成 (PostgreSQL/Redis)
+- [ ] 完善部署工具
+- [ ] 性能优化和监控
 
 ## 配置说明
 
