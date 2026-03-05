@@ -1,0 +1,119 @@
+[package]
+name = "agent-parallel-system"
+version = "0.1.0"
+edition = "2021"
+description = "基于LLM的多智能体并行协作系统"
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+repository = "https://github.com/yourusername/agent-parallel-system"
+readme = "README.md"
+
+# 更多元数据
+[package.metadata]
+rust-version = "1.70"
+
+# 依赖项
+[dependencies]
+# Web框架
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1.37", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "compression-br"] }
+
+# 数据库
+sqlx = { version = "0.7", features = [
+    "runtime-tokio-native-tls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+] }
+postgres-types = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+
+# 序列化/反序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 验证
+validator = { version = "0.18", features = ["derive"] }
+
+# 认证和加密
+jsonwebtoken = { version = "9.3", optional = true }
+argon2 = "0.5"
+bcrypt = "0.15"
+
+# 配置管理
+config = "0.13"
+dotenv = "0.15"
+
+# 日志和监控
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = { version = "0.21", optional = true }
+opentelemetry-otlp = { version = "0.14", optional = true }
+
+# Redis和消息队列
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+bb8 = "0.9"
+bb8-redis = { version = "0.18", optional = true }
+
+# HTTP客户端
+reqwest = { version = "0.11", features = ["json", "stream"] }
+
+# 错误处理
+anyhow = "1.0"
+thiserror = "1.0"
+
+# 工具库
+futures = "0.3"
+async-trait = "0.1"
+rand = "0.8"
+clap = { version = "4.4", features = ["derive"] }
+regex = "1.10"
+lazy_static = "1.4"
+sha2 = "0.10"
+log = "0.4"
+hex = "0.4"
+
+# LLM集成
+openai = { version = "1.1", optional = true } # OpenAI API客户端
+
+# 开发依赖
+[dev-dependencies]
+# 测试
+tokio-test = "0.4"
+mockall = "0.12"
+testcontainers = "0.15"
+testcontainers-modules = "0.2"
+
+# 代码质量
+cargo-make = "0.37"
+
+# 构建配置
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'
+
+# 特性标志
+[features]
+default = ["postgres", "redis", "jwt"]
+postgres = ["sqlx/postgres"]
+redis = ["dep:bb8-redis"]
+jwt = ["dep:jsonwebtoken"]
+openai = ["dep:openai"]
+monitoring = ["dep:opentelemetry", "dep:opentelemetry-otlp"]
+
+# 工作区（可选）
+# [workspace]
+# members = [
+#     "crates/*",
+# ]
+# resolver = "2"

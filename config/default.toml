@@ -1,0 +1,58 @@
+# 应用配置
+app_name = "Agent Parallel System"
+environment = "development"
+debug = true
+app_url = "http://localhost:8000"
+
+# 服务器配置
+[server]
+host = "0.0.0.0"
+port = 8000
+workers = 4
+api_prefix = "/api/v1"
+
+# 数据库配置
+[database]
+url = "postgres://postgres:password@localhost:5432/agent_system"
+max_connections = 20
+min_connections = 5
+connect_timeout = 10
+idle_timeout = 300
+
+# Redis配置
+[redis]
+url = "redis://localhost:6379"
+pool_size = 10
+connection_timeout = 5
+
+# JWT配置
+[jwt]
+secret = "your-super-secret-jwt-key-change-this-in-production"
+algorithm = "HS256"
+access_token_expire_minutes = 30
+refresh_token_expire_days = 7
+
+# 安全配置
+[security]
+bcrypt_cost = 12
+rate_limit = 100
+rate_limit_window = 60
+
+# OpenAI配置
+[openai]
+api_key = "your-openai-api-key"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4"
+max_tokens = 4096
+temperature = 0.7
+
+# 日志配置
+[logging]
+level = "info"
+format = "json"
+
+# 存储配置
+[storage]
+storage_type = "local"
+local_path = "./storage"
+max_file_size = 10485760

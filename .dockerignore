@@ -1,0 +1,53 @@
+# 忽略Git相关文件
+.git
+.gitignore
+.gitmodules
+
+# 忽略IDE和编辑器文件
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 忽略构建和缓存文件
+target/
+**/*.rs.bk
+# Cargo.lock
+
+# 忽略测试和文档文件
+tests/
+**/*.test
+**/*.spec
+coverage/
+
+# 忽略日志和临时文件
+logs/
+*.log
+tmp/
+temp/
+
+# 忽略环境配置文件（生产环境应该使用自己的配置）
+.env
+.env.local
+.env.development
+
+# 忽略不必要的文档
+*.md
+LICENSE
+CHANGELOG
+
+# 忽略特定于开发的脚本
+test_architecture.sh
+scripts/test-start.sh
+docker-compose.test.yml
+
+# 忽略大文件
+*.pdf
+*.zip
+*.tar.gz
+*.iso
+
+# 忽略特定于操作系统的文件
+.DS_Store
+Thumbs.db

@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Parallel System UI</title>
+  <style>
+    :root {
+      --bg: #f5f7f2;
+      --paper: #ffffffd9;
+      --ink: #18231d;
+      --accent: #0f766e;
+      --accent-2: #f59e0b;
+      --muted: #5b6a62;
+      --border: #d4ded6;
+      --ok: #0b8d3d;
+      --err: #b91c1c;
+      --mono: "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+      --sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 10%, #cbe6d9 0%, transparent 35%),
+        radial-gradient(circle at 85% 15%, #ffe6bf 0%, transparent 30%),
+        linear-gradient(140deg, #eef3ec 0%, #f7f4ea 100%);
+      min-height: 100vh;
+      padding: 24px;
+      animation: fadeIn .6s ease-out;
+    }
+
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 14px 36px rgba(16, 24, 20, 0.1);
+    }
+
+    header {
+      padding: 24px;
+      background: linear-gradient(100deg, #11473f, #0f766e);
+      color: #f7fffc;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      letter-spacing: 0.2px;
+    }
+
+    .subtitle {
+      margin: 0;
+      opacity: .9;
+      font-size: 14px;
+    }
+
+    main {
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      background: #fff;
+      animation: slideUp .35s ease-out;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 13px;
+      font: 600 13px var(--sans);
+      cursor: pointer;
+      transition: transform .15s ease, filter .2s ease;
+      color: white;
+      background: var(--accent);
+    }
+
+    button.alt {
+      background: var(--accent-2);
+      color: #2b1d05;
+    }
+
+    button:hover { filter: brightness(1.06); transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+
+    .status {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--muted);
+      white-space: pre-wrap;
+      line-height: 1.4;
+    }
+
+    .ok { color: var(--ok); }
+    .err { color: var(--err); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 9px 8px;
+      border-bottom: 1px dashed var(--border);
+    }
+
+    th {
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: #eff6f4;
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(8px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Agent Parallel System</h1>
+      <p class="subtitle">操作台（最小可用版）</p>
+    </header>
+    <main>
+      <section class="panel">
+        <strong>服务状态</strong>
+        <div class="actions">
+          <button id="btn-health">检查 /health</button>
+          <button class="alt" id="btn-ready">检查 /ready</button>
+        </div>
+        <p id="health-result" class="status">等待检查...</p>
+      </section>
+
+      <section class="panel">
+        <strong>API 端点清单</strong>
+        <div class="actions">
+          <button id="btn-load-endpoints">加载端点</button>
+        </div>
+        <table>
+          <thead>
+            <tr><th>METHOD</th><th>PATH</th><th>说明</th></tr>
+          </thead>
+          <tbody id="endpoint-body">
+            <tr><td colspan="3" class="status">尚未加载</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const result = document.getElementById("health-result");
+    const tbody = document.getElementById("endpoint-body");
+
+    async function probe(path) {
+      result.textContent = "请求中: " + path;
+      result.className = "status";
+      try {
+        const res = await fetch(path);
+        const text = await res.text();
+        const msg = `${path} -> HTTP ${res.status}\n${text}`;
+        result.textContent = msg;
+        result.className = "status " + (res.ok ? "ok" : "err");
+      } catch (err) {
+        result.textContent = `${path} -> 请求失败\n${err}`;
+        result.className = "status err";
+      }
+    }
+
+    async function loadEndpoints() {
+      tbody.innerHTML = '<tr><td colspan="3" class="status">加载中...</td></tr>';
+      try {
+        const res = await fetch("/ui/endpoints");
+        const list = await res.json();
+        if (!Array.isArray(list)) throw new Error("响应格式错误");
+        tbody.innerHTML = "";
+        for (const item of list) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td><code>${item.method}</code></td><td><code>${item.path}</code></td><td>${item.description}</td>`;
+          tbody.appendChild(tr);
+        }
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="3" class="status err">加载失败: ${err}</td></tr>`;
+      }
+    }
+
+    document.getElementById("btn-health").addEventListener("click", () => probe("/health"));
+    document.getElementById("btn-ready").addEventListener("click", () => probe("/ready"));
+    document.getElementById("btn-load-endpoints").addEventListener("click", loadEndpoints);
+  </script>
+</body>
+</html>
