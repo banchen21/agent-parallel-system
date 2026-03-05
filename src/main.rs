@@ -90,15 +90,20 @@ async fn start_server() -> anyhow::Result<()> {
     // 创建应用状态
     let app_state = agent_parallel_system::AppState::new(db_pool, redis_pool);
     
-    // 构建应用路由
-    let app = Router::new()
+    // 构建 API 路由：同时挂载到根路径和配置前缀（兼容旧客户端）
+    let api_routes = Router::new()
         .merge(routes::ui_routes())
         .merge(routes::health_routes())
         .merge(routes::auth_routes())
         .merge(routes::task_routes())
         .merge(routes::agent_routes())
         .merge(routes::workspace_routes())
-        .merge(routes::workflow_routes())
+        .merge(routes::workflow_routes());
+
+    let api_prefix = config::CONFIG.server.api_prefix.clone();
+    let app = Router::new()
+        .merge(api_routes.clone())
+        .nest(&api_prefix, api_routes)
         .layer(
             CorsLayer::new()
                 .allow_origin("*".parse::<HeaderValue>().unwrap())
@@ -115,6 +120,7 @@ async fn start_server() -> anyhow::Result<()> {
     ));
     
     info!("Server listening on http://{}", addr);
+    info!("API prefix mounted at {}", api_prefix);
     
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

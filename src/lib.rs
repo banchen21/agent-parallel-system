@@ -18,6 +18,7 @@ use crate::{
         agent_service::AgentService,
         workspace_service::WorkspaceService,
         orchestrator_service::OrchestratorService,
+        workflow_service::WorkflowService,
     },
 };
 
@@ -29,6 +30,7 @@ pub struct AppState {
     pub agent_service: Arc<AgentService>,
     pub workspace_service: Arc<WorkspaceService>,
     pub orchestrator_service: Arc<OrchestratorService>,
+    pub workflow_service: Arc<WorkflowService>,
     pub db_pool: PgPool,
     pub redis_pool: bb8::Pool<RedisConnectionManager>,
 }
@@ -43,6 +45,7 @@ impl AppState {
             db_pool.clone(),
             redis_pool.clone(),
         ));
+        let workflow_service = Arc::new(WorkflowService::new(db_pool.clone()));
 
         Self {
             auth_service,
@@ -50,6 +53,7 @@ impl AppState {
             agent_service,
             workspace_service,
             orchestrator_service,
+            workflow_service,
             db_pool,
             redis_pool,
         }

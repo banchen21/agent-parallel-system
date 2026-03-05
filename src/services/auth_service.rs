@@ -68,15 +68,16 @@ impl AuthService {
     pub async fn login(&self, request: LoginRequest) -> Result<AuthResponse, AppError> {
         // 验证请求
         request.validate()?;
+        let login_id = request.username.trim();
         
         // 查找用户
         let user = sqlx::query_as!(
             User,
             r#"
             SELECT * FROM users 
-            WHERE username = $1 AND is_active = true
+            WHERE (username = $1 OR email = $1) AND is_active = true
             "#,
-            request.username
+            login_id
         )
         .fetch_optional(&self.db_pool)
         .await?;
@@ -86,7 +87,7 @@ impl AuthService {
         })?;
         
         // 验证密码
-        let is_valid = PasswordHasherUtil::verify_password(&request.password, &user.password_hash)?;
+        let is_valid = PasswordHasherUtil::verify_password(request.password.trim(), &user.password_hash)?;
         
         if !is_valid {
             return Err(AppError::AuthenticationError("用户名或密码错误".to_string()));

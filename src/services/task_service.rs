@@ -123,40 +123,24 @@ impl TaskService {
             return Err(AppError::PermissionDenied("没有访问该工作空间的权限".to_string()));
         }
         
-        let mut query = "
+        let tasks = sqlx::query_as!(
+            Task,
+            r#"
             SELECT t.* FROM tasks t
             WHERE t.workspace_id = $1
-        ".to_string();
-        
-        let mut params: Vec<String> = vec![workspace_id.to_string()];
-        let mut param_count = 2;
-        
-        if let Some(ref status) = status_filter {
-            query.push_str(&format!(" AND t.status = ${}", param_count));
-            params.push(status.to_string());
-            param_count += 1;
-        }
-        
-        if let Some(ref priority) = priority_filter {
-            query.push_str(&format!(" AND t.priority = ${}", param_count));
-            params.push(priority.to_string());
-            param_count += 1;
-        }
-        
-        query.push_str(&format!(" ORDER BY t.created_at DESC LIMIT ${} OFFSET ${}", param_count, param_count + 1));
-        params.push(page_size.to_string());
-        params.push(offset.to_string());
-        
-        // 由于sqlx::query_as!需要编译时知道参数，这里使用动态查询
-        // 在实际应用中，可以使用更复杂的查询构建器
-        let tasks = sqlx::query_as::<_, Task>(&query)
-            .bind(workspace_id)
-            .bind(status_filter.map(|s| s.to_string()))
-            .bind(priority_filter.map(|p| p.to_string()))
-            .bind(page_size)
-            .bind(offset)
-            .fetch_all(&self.db_pool)
-            .await?;
+              AND ($2::text IS NULL OR t.status::text = $2)
+              AND ($3::text IS NULL OR t.priority::text = $3)
+            ORDER BY t.created_at DESC
+            LIMIT $4 OFFSET $5
+            "#,
+            workspace_id,
+            status_filter.map(|s| s.to_string()),
+            priority_filter.map(|p| p.to_string()),
+            page_size,
+            offset
+        )
+        .fetch_all(&self.db_pool)
+        .await?;
         
         Ok(tasks)
     }

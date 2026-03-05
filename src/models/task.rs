@@ -9,6 +9,7 @@ use crate::core::security::InputValidator;
 
 /// 任务状态
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum TaskStatus {
     Pending,
@@ -20,6 +21,7 @@ pub enum TaskStatus {
 
 /// 任务优先级
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum TaskPriority {
     Low,

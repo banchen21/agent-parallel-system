@@ -7,6 +7,7 @@ use validator::Validate;
 
 /// 任务优先级
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum TaskPriority {
     Low,
@@ -17,6 +18,7 @@ pub enum TaskPriority {
 
 /// 智能体状态
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum AgentStatus {
     Online,

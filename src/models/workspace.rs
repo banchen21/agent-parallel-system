@@ -7,6 +7,7 @@ use validator::Validate;
 
 /// 工作空间权限级别
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 pub enum PermissionLevel {
     Read,

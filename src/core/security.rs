@@ -14,6 +14,8 @@ pub struct Claims {
     pub sub: Uuid,        // 用户ID
     pub username: String, // 用户名
     pub roles: Vec<String>, // 用户角色
+    #[serde(default)]
+    pub jti: Option<String>, // 令牌唯一ID（兼容旧令牌可为空）
     pub exp: i64,         // 过期时间
     pub iat: i64,         // 签发时间
 }
@@ -67,6 +69,7 @@ impl JwtUtil {
             sub: user_id,
             username: username.to_string(),
             roles,
+            jti: Some(Uuid::new_v4().to_string()),
             exp: expire.timestamp(),
             iat: now.timestamp(),
         };
@@ -92,6 +95,7 @@ impl JwtUtil {
             sub: user_id,
             username: username.to_string(),
             roles: vec!["refresh".to_string()],
+            jti: Some(Uuid::new_v4().to_string()),
             exp: expire.timestamp(),
             iat: now.timestamp(),
         };
@@ -162,11 +166,17 @@ impl InputValidator {
         if username.len() > 50 {
             return Err(AppError::ValidationError("用户名长度不能超过50个字符".to_string()));
         }
-        
-        let username_regex = regex::Regex::new(r"^[a-zA-Z0-9_]+$").unwrap();
+
+        // 兼容邮箱作为登录名场景
+        if username.contains('@') {
+            return Self::validate_email(username);
+        }
+
+        // 允许常见用户名字符：字母、数字、下划线、点、短横线
+        let username_regex = regex::Regex::new(r"^[a-zA-Z0-9_.-]+$").unwrap();
         if !username_regex.is_match(username) {
             return Err(AppError::ValidationError(
-                "用户名只能包含字母、数字和下划线".to_string(),
+                "用户名只能包含字母、数字、下划线、点或短横线，或使用邮箱地址".to_string(),
             ));
         }
         
@@ -295,5 +305,33 @@ impl RateLimiter {
             config::CONFIG.security.rate_limit_window,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JwtUtil;
+    use uuid::Uuid;
+
+    #[test]
+    fn access_tokens_should_be_unique_even_when_issued_immediately() {
+        let user_id = Uuid::new_v4();
+        let roles = vec!["user".to_string()];
+
+        let token1 =
+            JwtUtil::generate_access_token(user_id, "token-user", roles.clone()).unwrap();
+        let token2 = JwtUtil::generate_access_token(user_id, "token-user", roles).unwrap();
+
+        assert_ne!(token1, token2);
+    }
+
+    #[test]
+    fn refresh_tokens_should_be_unique_even_when_issued_immediately() {
+        let user_id = Uuid::new_v4();
+
+        let token1 = JwtUtil::generate_refresh_token(user_id, "token-user").unwrap();
+        let token2 = JwtUtil::generate_refresh_token(user_id, "token-user").unwrap();
+
+        assert_ne!(token1, token2);
     }
 }
