@@ -247,6 +247,23 @@ impl MessageService {
         Ok(messages)
     }
 
+    /// 获取用户未读消息数
+    pub async fn get_user_unread_count(&self, user_id: Uuid) -> Result<i64, AppError> {
+        let row = sqlx::query!(
+            r#"
+            SELECT COUNT(*) as count
+            FROM user_messages
+            WHERE user_id = $1 AND read = false
+            "#,
+            user_id
+        )
+        .fetch_one(&self.db_pool)
+        .await
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        Ok(row.count.unwrap_or(0))
+    }
+
     /// 标记消息为已读
     pub async fn mark_message_as_read(
         &self,
@@ -341,6 +358,34 @@ impl MessageService {
         }
 
         Ok(())
+    }
+
+    /// 批量标记消息为已读
+    pub async fn mark_messages_as_read_batch(
+        &self,
+        message_ids: &[Uuid],
+        message_type: &str,
+    ) -> Result<u64, AppError> {
+        let mut affected = 0u64;
+        for id in message_ids {
+            self.mark_message_as_read(*id, message_type).await?;
+            affected += 1;
+        }
+        Ok(affected)
+    }
+
+    /// 批量删除消息
+    pub async fn delete_messages_batch(
+        &self,
+        message_ids: &[Uuid],
+        message_type: &str,
+    ) -> Result<u64, AppError> {
+        let mut affected = 0u64;
+        for id in message_ids {
+            self.delete_message(*id, message_type).await?;
+            affected += 1;
+        }
+        Ok(affected)
     }
 
     /// 订阅智能体消息

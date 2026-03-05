@@ -16,6 +16,7 @@ use crate::{
         agent::{
             AgentHeartbeatRequest, AgentStatus, RegisterAgentRequest, TaskPriority as AgentTaskPriority,
         },
+        message::SendMessageRequest,
         task::{
             CreateTaskRequest, TaskDecompositionRequest, TaskPriority, TaskStatus,
             UpdateTaskRequest, UpdateTaskStatusRequest,
@@ -80,21 +81,21 @@ pub fn auth_routes() -> Router<AppState> {
 pub fn task_routes() -> Router<AppState> {
     Router::new()
         .route("/tasks", post(create_task).get(get_tasks))
-        .route("/tasks/{task_id}", get(get_task).put(update_task).delete(delete_task))
-        .route("/tasks/{task_id}/status", put(update_task_status))
-        .route("/tasks/{task_id}/decompose", post(decompose_task))
-        .route("/tasks/{task_id}/subtasks", get(get_subtasks))
+        .route("/tasks/:task_id", get(get_task).put(update_task).delete(delete_task))
+        .route("/tasks/:task_id/status", put(update_task_status))
+        .route("/tasks/:task_id/decompose", post(decompose_task))
+        .route("/tasks/:task_id/subtasks", get(get_subtasks))
 }
 
 /// 智能体路由
 pub fn agent_routes() -> Router<AppState> {
     Router::new()
         .route("/agents", get(get_agents).post(register_agent))
-        .route("/agents/{agent_id}", get(get_agent))
-        .route("/agents/{agent_id}/heartbeat", post(update_heartbeat))
-        .route("/agents/{agent_id}/status", put(update_agent_status))
-        .route("/agents/{agent_id}/assign-task", post(assign_task_to_agent))
-        .route("/agents/{agent_id}/complete-task", post(complete_task_and_release_agent))
+        .route("/agents/:agent_id", get(get_agent))
+        .route("/agents/:agent_id/heartbeat", post(update_heartbeat))
+        .route("/agents/:agent_id/status", put(update_agent_status))
+        .route("/agents/:agent_id/assign-task", post(assign_task_to_agent))
+        .route("/agents/:agent_id/complete-task", post(complete_task_and_release_agent))
         .route("/agents/stats", get(get_agent_stats))
 }
 
@@ -102,21 +103,37 @@ pub fn agent_routes() -> Router<AppState> {
 pub fn workspace_routes() -> Router<AppState> {
     Router::new()
         .route("/workspaces", post(create_workspace).get(get_workspaces))
-        .route("/workspaces/{workspace_id}", get(get_workspace).put(update_workspace).delete(delete_workspace))
-        .route("/workspaces/{workspace_id}/permissions", get(get_workspace_permissions).post(grant_permission))
-        .route("/workspaces/{workspace_id}/permissions/{permission_id}", delete(revoke_permission))
-        .route("/workspaces/{workspace_id}/documents", get(get_workspace_documents))
-        .route("/workspaces/{workspace_id}/tools", get(get_workspace_tools))
-        .route("/workspaces/{workspace_id}/stats", get(get_workspace_stats))
+        .route("/workspaces/:workspace_id", get(get_workspace).put(update_workspace).delete(delete_workspace))
+        .route("/workspaces/:workspace_id/permissions", get(get_workspace_permissions).post(grant_permission))
+        .route("/workspaces/:workspace_id/permissions/:permission_id", delete(revoke_permission))
+        .route("/workspaces/:workspace_id/documents", get(get_workspace_documents))
+        .route("/workspaces/:workspace_id/tools", get(get_workspace_tools))
+        .route("/workspaces/:workspace_id/stats", get(get_workspace_stats))
 }
 
 /// 工作流路由（简化版）
 pub fn workflow_routes() -> Router<AppState> {
     Router::new()
         .route("/workflows", get(get_workflows).post(create_workflow))
-        .route("/workflows/{workflow_id}", get(get_workflow).delete(delete_workflow))
-        .route("/workflows/{workflow_id}/execute", post(execute_workflow))
-        .route("/workflows/{workflow_id}/executions/{execution_id}", get(get_workflow_execution))
+        .route("/workflows/:workflow_id", get(get_workflow).delete(delete_workflow))
+        .route("/workflows/:workflow_id/execute", post(execute_workflow))
+        .route("/workflows/:workflow_id/executions", get(get_workflow_executions))
+        .route("/workflows/:workflow_id/executions/:execution_id", get(get_workflow_execution))
+}
+
+/// 消息路由
+pub fn message_routes() -> Router<AppState> {
+    Router::new()
+        .route("/messages", post(send_message))
+        .route("/messages/user", get(get_my_messages))
+        .route("/messages/user/unread-count", get(get_my_unread_count))
+        .route("/messages/agent/:agent_id", get(get_agent_messages))
+        .route("/messages/task/:task_id", get(get_task_messages))
+        .route("/messages/:message_type/:message_id/read", post(mark_message_read))
+        .route("/messages/:message_type/:message_id", delete(delete_message))
+        .route("/messages/:message_type/read-batch", post(mark_messages_read_batch))
+        .route("/messages/:message_type/delete-batch", post(delete_messages_batch))
+        .route("/messages/broadcast", post(send_system_broadcast))
 }
 
 // 健康检查处理器
@@ -677,6 +694,17 @@ fn build_ui_endpoints() -> Vec<UiEndpoint> {
         UiEndpoint {
             group: "Workflow",
             method: "GET",
+            path: "/workflows/{workflow_id}/executions",
+            description: "工作流执行列表",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"message": "Get workflow executions endpoint"}),
+            notes: "支持 query: limit, offset。",
+        },
+        UiEndpoint {
+            group: "Workflow",
+            method: "GET",
             path: "/workflows/{workflow_id}/executions/{execution_id}",
             description: "工作流执行详情",
             auth: true,
@@ -684,6 +712,128 @@ fn build_ui_endpoints() -> Vec<UiEndpoint> {
             request_example: None,
             response_example: json!({"message": "Get workflow execution endpoint"}),
             notes: "将路径参数替换为实际 UUID。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "POST",
+            path: "/messages",
+            description: "发送消息",
+            auth: true,
+            implemented: true,
+            request_example: Some(json!({
+                "target_type": "user",
+                "target_id": "00000000-0000-0000-0000-000000000000",
+                "message_type": "notice",
+                "content": "hello"
+            })),
+            response_example: json!({"message": "Send message endpoint"}),
+            notes: "target_type 支持 agent/task/user/system。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "GET",
+            path: "/messages/user",
+            description: "我的用户消息",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"message": "Get user messages endpoint"}),
+            notes: "支持 query: limit, offset。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "GET",
+            path: "/messages/user/unread-count",
+            description: "我的未读消息数",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"data": {"unread_count": 3}}),
+            notes: "返回当前用户未读 user 消息数。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "GET",
+            path: "/messages/agent/{agent_id}",
+            description: "智能体消息",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"message": "Get agent messages endpoint"}),
+            notes: "支持 query: limit, offset。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "GET",
+            path: "/messages/task/{task_id}",
+            description: "任务消息",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"message": "Get task messages endpoint"}),
+            notes: "支持 query: limit, offset。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "POST",
+            path: "/messages/{message_type}/{message_id}/read",
+            description: "标记消息已读",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"message": "Mark message read endpoint"}),
+            notes: "message_type 支持 agent/user。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "DELETE",
+            path: "/messages/{message_type}/{message_id}",
+            description: "删除消息",
+            auth: true,
+            implemented: true,
+            request_example: None,
+            response_example: json!({"message": "Delete message endpoint"}),
+            notes: "message_type 支持 agent/user/task。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "POST",
+            path: "/messages/{message_type}/read-batch",
+            description: "批量标记已读",
+            auth: true,
+            implemented: true,
+            request_example: Some(json!({
+                "message_ids": ["00000000-0000-0000-0000-000000000000"]
+            })),
+            response_example: json!({"data": {"affected_count": 1}}),
+            notes: "user 类型会校验消息归属。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "POST",
+            path: "/messages/{message_type}/delete-batch",
+            description: "批量删除消息",
+            auth: true,
+            implemented: true,
+            request_example: Some(json!({
+                "message_ids": ["00000000-0000-0000-0000-000000000000"]
+            })),
+            response_example: json!({"data": {"affected_count": 1}}),
+            notes: "user 类型会校验消息归属。",
+        },
+        UiEndpoint {
+            group: "Message",
+            method: "POST",
+            path: "/messages/broadcast",
+            description: "发送系统广播",
+            auth: true,
+            implemented: true,
+            request_example: Some(json!({
+                "message_type": "system_notice",
+                "content": "maintenance at 22:00"
+            })),
+            response_example: json!({"message": "Send broadcast endpoint"}),
+            notes: "发送到 Redis 频道 system:broadcast。",
         },
     ]
 }
@@ -721,6 +871,30 @@ struct WorkflowListQuery {
 }
 
 #[derive(Deserialize)]
+struct ExecutionListQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct MessageListQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct BroadcastRequest {
+    message_type: String,
+    content: String,
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct BatchMessageIdsRequest {
+    message_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
 struct AgentListQuery {
     capabilities: Option<String>,
 }
@@ -740,6 +914,8 @@ struct AssignTaskBody {
 #[derive(Deserialize)]
 struct CompleteTaskBody {
     task_id: Uuid,
+    success: Option<bool>,
+    result: Option<serde_json::Value>,
 }
 
 fn success_response(data: Value, message: &str) -> Json<Value> {
@@ -847,7 +1023,22 @@ async fn create_task(
 ) -> Result<Json<Value>, AppError> {
     let user_id = extract_user_id(&headers)?;
     let task = state.task_service.create_task(request, user_id).await?;
-    Ok(success_response(json!(task.to_response(vec![])), "任务创建成功"))
+
+    // 创建后立即尝试自动分配，失败不影响任务创建结果
+    if let Err(err) = state
+        .orchestrator_service
+        .assign_task_to_best_agent(task.id)
+        .await
+    {
+        tracing::warn!("任务 {} 自动分配失败: {}", task.id, err);
+    }
+
+    let task_response = state
+        .task_service
+        .get_task_response(task.id, user_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("任务不存在".to_string()))?;
+    Ok(success_response(json!(task_response), "任务创建成功"))
 }
 
 async fn get_tasks(
@@ -1039,9 +1230,10 @@ async fn complete_task_and_release_agent(
     Json(request): Json<CompleteTaskBody>,
 ) -> Result<Json<Value>, AppError> {
     let _ = extract_user_id(&headers)?;
+    let success = request.success.unwrap_or(true);
     state
-        .agent_service
-        .complete_task_and_release_agent(agent_id, request.task_id)
+        .orchestrator_service
+        .handle_task_completion_by_agent(agent_id, request.task_id, request.result, success)
         .await?;
     Ok(success_response(Value::Null, "任务完成并释放智能体成功"))
 }
@@ -1359,6 +1551,21 @@ async fn execute_workflow(
     ))
 }
 
+async fn get_workflow_executions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(workflow_id): Path<Uuid>,
+    Query(query): Query<ExecutionListQuery>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+    let executions = state
+        .workflow_service
+        .list_executions(workflow_id, user_id, query.limit, query.offset)
+        .await?;
+    let data: Vec<_> = executions.into_iter().map(|e| e.to_response()).collect();
+    Ok(success_response(json!(data), "工作流执行列表获取成功"))
+}
+
 async fn get_workflow_execution(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1371,6 +1578,255 @@ async fn get_workflow_execution(
         .await?
         .ok_or_else(|| AppError::NotFound("工作流执行记录不存在".to_string()))?;
     Ok(success_response(json!(execution.to_response()), "工作流执行详情获取成功"))
+}
+
+async fn ensure_user_message_owner(
+    state: &AppState,
+    message_id: Uuid,
+    user_id: Uuid,
+) -> Result<(), AppError> {
+    let row = sqlx::query!(
+        "SELECT user_id FROM user_messages WHERE id = $1",
+        message_id
+    )
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let row = row.ok_or_else(|| AppError::NotFound("消息不存在".to_string()))?;
+    if row.user_id != user_id {
+        return Err(AppError::PermissionDenied("没有权限操作该消息".to_string()));
+    }
+    Ok(())
+}
+
+// 消息处理器
+async fn send_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SendMessageRequest>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+
+    let response = match request.target_type.as_str() {
+        "agent" => {
+            let msg = state
+                .message_service
+                .send_agent_message(
+                    request.target_id,
+                    &request.message_type,
+                    &request.content,
+                    request.metadata,
+                )
+                .await?;
+            json!(msg)
+        }
+        "task" => {
+            let task = state
+                .task_service
+                .get_task_by_id(request.target_id, user_id)
+                .await?;
+            if task.is_none() {
+                return Err(AppError::PermissionDenied("没有访问该任务的权限".to_string()));
+            }
+
+            let msg = state
+                .message_service
+                .send_task_message(
+                    request.target_id,
+                    &request.message_type,
+                    &request.content,
+                    request.metadata,
+                )
+                .await?;
+            json!(msg)
+        }
+        "user" => {
+            if request.target_id != user_id {
+                return Err(AppError::PermissionDenied("只能给自己发送用户消息".to_string()));
+            }
+            let msg = state
+                .message_service
+                .send_user_message(
+                    request.target_id,
+                    &request.message_type,
+                    &request.content,
+                    request.metadata,
+                )
+                .await?;
+            json!(msg)
+        }
+        "system" => {
+            state
+                .message_service
+                .send_system_broadcast(
+                    &request.message_type,
+                    &request.content,
+                    request.metadata,
+                )
+                .await?;
+            Value::Null
+        }
+        _ => {
+            return Err(AppError::ValidationError(
+                "target_type 必须是 agent/task/user/system".to_string(),
+            ));
+        }
+    };
+
+    Ok(success_response(response, "消息发送成功"))
+}
+
+async fn get_my_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MessageListQuery>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+    let messages = state
+        .message_service
+        .get_user_messages(user_id, query.limit, query.offset)
+        .await?;
+    Ok(success_response(json!(messages), "用户消息获取成功"))
+}
+
+async fn get_my_unread_count(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+    let unread_count = state.message_service.get_user_unread_count(user_id).await?;
+    Ok(success_response(json!({ "unread_count": unread_count }), "未读消息数获取成功"))
+}
+
+async fn get_agent_messages(
+    State(state): State<AppState>,
+    _headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+    Query(query): Query<MessageListQuery>,
+) -> Result<Json<Value>, AppError> {
+    let messages = state
+        .message_service
+        .get_agent_messages(agent_id, query.limit, query.offset)
+        .await?;
+    Ok(success_response(json!(messages), "智能体消息获取成功"))
+}
+
+async fn get_task_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(task_id): Path<Uuid>,
+    Query(query): Query<MessageListQuery>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+    let task = state.task_service.get_task_by_id(task_id, user_id).await?;
+    if task.is_none() {
+        return Err(AppError::PermissionDenied("没有访问该任务的权限".to_string()));
+    }
+
+    let messages = state
+        .message_service
+        .get_task_messages(task_id, query.limit, query.offset)
+        .await?;
+    Ok(success_response(json!(messages), "任务消息获取成功"))
+}
+
+async fn mark_message_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((message_type, message_id)): Path<(String, Uuid)>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+    if message_type == "user" {
+        ensure_user_message_owner(&state, message_id, user_id).await?;
+    }
+    state
+        .message_service
+        .mark_message_as_read(message_id, &message_type)
+        .await?;
+    Ok(success_response(Value::Null, "消息已标记为已读"))
+}
+
+async fn delete_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((message_type, message_id)): Path<(String, Uuid)>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = extract_user_id(&headers)?;
+    if message_type == "user" {
+        ensure_user_message_owner(&state, message_id, user_id).await?;
+    }
+    state
+        .message_service
+        .delete_message(message_id, &message_type)
+        .await?;
+    Ok(success_response(Value::Null, "消息删除成功"))
+}
+
+async fn mark_messages_read_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(message_type): Path<String>,
+    Json(request): Json<BatchMessageIdsRequest>,
+) -> Result<Json<Value>, AppError> {
+    if request.message_ids.is_empty() {
+        return Err(AppError::ValidationError("message_ids 不能为空".to_string()));
+    }
+
+    let user_id = extract_user_id(&headers)?;
+    if message_type == "user" {
+        for id in &request.message_ids {
+            ensure_user_message_owner(&state, *id, user_id).await?;
+        }
+    }
+
+    let affected = state
+        .message_service
+        .mark_messages_as_read_batch(&request.message_ids, &message_type)
+        .await?;
+    Ok(success_response(
+        json!({ "affected_count": affected }),
+        "批量标记已读成功",
+    ))
+}
+
+async fn delete_messages_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(message_type): Path<String>,
+    Json(request): Json<BatchMessageIdsRequest>,
+) -> Result<Json<Value>, AppError> {
+    if request.message_ids.is_empty() {
+        return Err(AppError::ValidationError("message_ids 不能为空".to_string()));
+    }
+
+    let user_id = extract_user_id(&headers)?;
+    if message_type == "user" {
+        for id in &request.message_ids {
+            ensure_user_message_owner(&state, *id, user_id).await?;
+        }
+    }
+
+    let affected = state
+        .message_service
+        .delete_messages_batch(&request.message_ids, &message_type)
+        .await?;
+    Ok(success_response(
+        json!({ "affected_count": affected }),
+        "批量删除消息成功",
+    ))
+}
+
+async fn send_system_broadcast(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<BroadcastRequest>,
+) -> Result<Json<Value>, AppError> {
+    let _user_id = extract_user_id(&headers)?;
+    state
+        .message_service
+        .send_system_broadcast(&request.message_type, &request.content, request.metadata)
+        .await?;
+    Ok(success_response(Value::Null, "系统广播发送成功"))
 }
 
 #[cfg(test)]

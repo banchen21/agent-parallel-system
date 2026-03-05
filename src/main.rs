@@ -98,7 +98,8 @@ async fn start_server() -> anyhow::Result<()> {
         .merge(routes::task_routes())
         .merge(routes::agent_routes())
         .merge(routes::workspace_routes())
-        .merge(routes::workflow_routes());
+        .merge(routes::workflow_routes())
+        .merge(routes::message_routes());
 
     let api_prefix = config::CONFIG.server.api_prefix.clone();
     let app = Router::new()

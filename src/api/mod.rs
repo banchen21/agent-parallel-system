@@ -4,5 +4,5 @@ pub mod routes;
 pub use routes::{
     ui_routes,
     health_routes, auth_routes, task_routes, agent_routes, 
-    workspace_routes, workflow_routes,
+    workspace_routes, workflow_routes, message_routes,
 };

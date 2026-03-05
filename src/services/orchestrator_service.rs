@@ -292,6 +292,41 @@ impl OrchestratorService {
         .await?;
         
         let task = task.ok_or_else(|| AppError::NotFound("任务不存在".to_string()))?;
+        self.handle_task_completion_with_task(task, task_id, result, success).await
+    }
+
+    /// 由指定智能体回调任务完成（会校验任务归属）
+    pub async fn handle_task_completion_by_agent(
+        &self,
+        agent_id: Uuid,
+        task_id: Uuid,
+        result: Option<serde_json::Value>,
+        success: bool,
+    ) -> Result<(), AppError> {
+        let task = sqlx::query_as!(
+            Task,
+            "SELECT * FROM tasks WHERE id = $1",
+            task_id
+        )
+        .fetch_optional(&self.db_pool)
+        .await?;
+        
+        let task = task.ok_or_else(|| AppError::NotFound("任务不存在".to_string()))?;
+        if task.assigned_agent_id != Some(agent_id) {
+            return Err(AppError::ValidationError(
+                "任务不是由该智能体分配的".to_string(),
+            ));
+        }
+        self.handle_task_completion_with_task(task, task_id, result, success).await
+    }
+
+    async fn handle_task_completion_with_task(
+        &self,
+        task: Task,
+        task_id: Uuid,
+        result: Option<serde_json::Value>,
+        success: bool,
+    ) -> Result<(), AppError> {
         
         // 更新任务状态
         let new_status = if success {

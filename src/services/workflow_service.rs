@@ -248,6 +248,113 @@ impl WorkflowService {
         .fetch_optional(&self.db_pool)
         .await?;
 
-        Ok(execution)
+        if let Some(execution) = execution {
+            let synced = self.sync_execution_status_with_task(execution).await?;
+            return Ok(Some(synced));
+        }
+
+        Ok(None)
+    }
+
+    pub async fn list_executions(
+        &self,
+        workflow_id: Uuid,
+        user_id: Uuid,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Vec<WorkflowExecution>, AppError> {
+        let workflow = self.get_workflow(workflow_id, user_id).await?;
+        if workflow.is_none() {
+            return Err(AppError::NotFound("工作流不存在".to_string()));
+        }
+
+        let limit = limit.unwrap_or(20);
+        let offset = offset.unwrap_or(0);
+
+        let executions = sqlx::query_as::<_, WorkflowExecution>(
+            r#"
+            SELECT id, workflow_id, triggered_by, input, options, status, task_id, result, error_message, started_at, completed_at, created_at, updated_at
+            FROM workflow_executions
+            WHERE workflow_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.db_pool)
+        .await?;
+
+        let mut synced = Vec::with_capacity(executions.len());
+        for execution in executions {
+            synced.push(self.sync_execution_status_with_task(execution).await?);
+        }
+
+        Ok(synced)
+    }
+
+    async fn sync_execution_status_with_task(
+        &self,
+        execution: WorkflowExecution,
+    ) -> Result<WorkflowExecution, AppError> {
+        let Some(task_id) = execution.task_id else {
+            return Ok(execution);
+        };
+
+        let task_row = sqlx::query!(
+            r#"
+            SELECT status::text as "status!", result, completed_at
+            FROM tasks
+            WHERE id = $1
+            "#,
+            task_id
+        )
+        .fetch_optional(&self.db_pool)
+        .await?;
+
+        let Some(task_row) = task_row else {
+            return Ok(execution);
+        };
+
+        let desired_status = match task_row.status.as_str() {
+            "completed" => Some("completed"),
+            "failed" | "cancelled" => Some("failed"),
+            "in_progress" => Some("running"),
+            "pending" => Some("queued"),
+            _ => None,
+        };
+
+        let Some(desired_status) = desired_status else {
+            return Ok(execution);
+        };
+
+        if execution.status == desired_status
+            && execution.result == task_row.result
+            && execution.completed_at == task_row.completed_at
+        {
+            return Ok(execution);
+        }
+
+        let updated = sqlx::query_as::<_, WorkflowExecution>(
+            r#"
+            UPDATE workflow_executions
+            SET
+                status = $2,
+                result = COALESCE($3, result),
+                completed_at = COALESCE($4, completed_at),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, workflow_id, triggered_by, input, options, status, task_id, result, error_message, started_at, completed_at, created_at, updated_at
+            "#,
+        )
+        .bind(execution.id)
+        .bind(desired_status)
+        .bind(task_row.result)
+        .bind(task_row.completed_at)
+        .fetch_one(&self.db_pool)
+        .await?;
+
+        Ok(updated)
     }
 }
