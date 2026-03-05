@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, process};
+use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     http::{HeaderValue, Method},
@@ -13,7 +13,7 @@ use tracing::{info};
 
 use agent_parallel_system::{
     api::routes,
-    core::{config, database, logging}, // realtime_logging暂时注释
+    core::{config, database, logging, realtime_logging},
     workers::task_worker,
 };
 
@@ -89,12 +89,12 @@ async fn start_server() -> anyhow::Result<()> {
     // 创建应用状态
     let app_state = agent_parallel_system::AppState::new(db_pool.clone(), redis_pool.clone());
     
-    // 暂时注释以绕过Rust 1.93.1编译器bug
-    // let realtime_log_manager = Arc::new(realtime_logging::RealtimeLogManager::new(
-    //     redis_pool.clone(),
-    //     db_pool.clone(),
-    // ));
-    // let app_state = app_state.with_realtime_log_manager(realtime_log_manager);
+    // 初始化实时日志管理器（简化版本）
+    let realtime_log_manager = Arc::new(realtime_logging::RealtimeLogManager::new(
+        redis_pool.clone(),
+        db_pool.clone(),
+    ));
+    let app_state = app_state.with_realtime_log_manager(realtime_log_manager);
     
     // 构建 API 路由：同时挂载到根路径和配置前缀（兼容旧客户端）
     let api_routes = Router::new()
@@ -106,7 +106,8 @@ async fn start_server() -> anyhow::Result<()> {
         .merge(routes::workspace_routes())
         .merge(routes::workflow_routes())
         .merge(routes::message_routes());
-        // .merge(routes::realtime_log_routes()); // 暂时注释
+        // 实时日志路由暂时禁用，等待完整实现
+        // .merge(routes::realtime_log_routes());
 
     let api_prefix = config::CONFIG.server.api_prefix.clone();
     let app = Router::new()

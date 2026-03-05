@@ -5,5 +5,7 @@ pub mod security;
 pub mod logging;
 pub mod dag;
 pub mod error_recovery;
-// 暂时注释以绕过Rust 1.93.1编译器bug
-// pub mod realtime_logging;
+pub mod realtime_logging_simple;
+
+// 重新导出简化版本
+pub use realtime_logging_simple as realtime_logging;
