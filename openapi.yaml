@@ -1,0 +1,1332 @@
+openapi: 3.0.0
+info:
+  title: Agent Parallel System API
+  description: 智能体并行系统 API 文档
+  version: 1.0.0
+  contact:
+    name: Agent Parallel System
+    url: https://github.com/agent-parallel-system
+
+servers:
+  - url: http://localhost:8000/api/v1
+    description: 本地开发服务器
+  - url: https://api.example.com/api/v1
+    description: 生产服务器
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        first_name:
+          type: string
+        last_name:
+          type: string
+        is_active:
+          type: boolean
+        is_superuser:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          example: bearer
+        expires_in:
+          type: integer
+          description: 过期时间（秒）
+        user:
+          $ref: '#/components/schemas/User'
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed]
+        priority:
+          type: string
+          enum: [low, medium, high, critical]
+        workspace_id:
+          type: string
+          format: uuid
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [online, offline, busy, idle]
+        capabilities:
+          type: object
+        endpoints:
+          type: object
+        current_load:
+          type: integer
+        max_concurrent_tasks:
+          type: integer
+        last_heartbeat:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        is_public:
+          type: boolean
+        owner_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Workflow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        dag:
+          type: object
+        workspace_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        message_type:
+          type: string
+        content:
+          type: string
+        sender_id:
+          type: string
+          format: uuid
+        recipient_id:
+          type: string
+          format: uuid
+        is_read:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    ApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+        timestamp:
+          type: string
+          format: date-time
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: 健康检查
+      description: 检查服务器是否正常运行
+      security: []
+      responses:
+        '200':
+          description: 服务器正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /ready:
+    get:
+      tags:
+        - Health
+      summary: 就绪检查
+      description: 检查服务器是否已准备好处理请求
+      security: []
+      responses:
+        '200':
+          description: 服务器已就绪
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: 用户注册
+      description: 创建新用户账户
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - email
+                - password
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                first_name:
+                  type: string
+                last_name:
+                  type: string
+      responses:
+        '200':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: 用户登录
+      description: 使用用户名和密码登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: 认证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: 刷新访问令牌
+      description: 使用刷新令牌获取新的访问令牌
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refresh_token
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: 令牌刷新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: 刷新令牌无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: 用户登出
+      description: 登出当前用户
+      responses:
+        '200':
+          description: 登出成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /auth/me:
+    get:
+      tags:
+        - Authentication
+      summary: 获取当前用户信息
+      description: 获取已认证用户的信息
+      responses:
+        '200':
+          description: 成功获取用户信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: 未认证
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/change-password:
+    post:
+      tags:
+        - Authentication
+      summary: 修改密码
+      description: 修改当前用户的密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - current_password
+                - new_password
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: 密码修改成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '400':
+          description: 密码不符合要求
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tasks:
+    get:
+      tags:
+        - Tasks
+      summary: 获取任务列表
+      description: 获取所有任务或按条件筛选
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, failed]
+      responses:
+        '200':
+          description: 成功获取任务列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+
+    post:
+      tags:
+        - Tasks
+      summary: 创建任务
+      description: 创建新任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - workspace_id
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [low, medium, high, critical]
+                  default: medium
+                workspace_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: 任务创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Task'
+
+  /tasks/{task_id}:
+    get:
+      tags:
+        - Tasks
+      summary: 获取任务详情
+      description: 获取指定任务的详细信息
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功获取任务详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Task'
+        '404':
+          description: 任务不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Tasks
+      summary: 更新任务
+      description: 更新任务信息
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  enum: [low, medium, high, critical]
+      responses:
+        '200':
+          description: 任务更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Task'
+
+    delete:
+      tags:
+        - Tasks
+      summary: 删除任务
+      description: 删除指定任务
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 任务删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /tasks/{task_id}/status:
+    put:
+      tags:
+        - Tasks
+      summary: 更新任务状态
+      description: 更新任务的执行状态
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [pending, in_progress, completed, failed]
+      responses:
+        '200':
+          description: 状态更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Task'
+
+  /tasks/{task_id}/decompose:
+    post:
+      tags:
+        - Tasks
+      summary: 分解任务
+      description: 将任务分解为子任务
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - subtasks
+              properties:
+                subtasks:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      title:
+                        type: string
+                      description:
+                        type: string
+      responses:
+        '200':
+          description: 任务分解成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+
+  /agents:
+    get:
+      tags:
+        - Agents
+      summary: 获取智能体列表
+      description: 获取所有可用智能体
+      parameters:
+        - name: capabilities
+          in: query
+          schema:
+            type: string
+            description: 逗号分隔的能力列表
+      responses:
+        '200':
+          description: 成功获取智能体列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Agent'
+
+    post:
+      tags:
+        - Agents
+      summary: 注册智能体
+      description: 注册新的智能体
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                endpoints:
+                  type: object
+                limits:
+                  type: object
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 智能体注册成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+
+  /agents/{agent_id}:
+    get:
+      tags:
+        - Agents
+      summary: 获取智能体详情
+      description: 获取指定智能体的详细信息
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功获取智能体详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+
+  /agents/{agent_id}/heartbeat:
+    post:
+      tags:
+        - Agents
+      summary: 更新智能体心跳
+      description: 更新智能体的心跳信息
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - current_load
+              properties:
+                current_load:
+                  type: integer
+                active_tasks:
+                  type: integer
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 心跳更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+
+  /agents/{agent_id}/status:
+    put:
+      tags:
+        - Agents
+      summary: 更新智能体状态
+      description: 更新智能体的运行状态
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [online, offline, busy, idle]
+      responses:
+        '200':
+          description: 状态更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Agent'
+
+  /agents/stats:
+    get:
+      tags:
+        - Agents
+      summary: 获取智能体统计信息
+      description: 获取所有智能体的统计数据
+      responses:
+        '200':
+          description: 成功获取统计信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      total_agents:
+                        type: integer
+                      online_agents:
+                        type: integer
+                      busy_agents:
+                        type: integer
+                      idle_agents:
+                        type: integer
+                      offline_agents:
+                        type: integer
+                      average_load:
+                        type: number
+                      total_load:
+                        type: integer
+
+  /workspaces:
+    get:
+      tags:
+        - Workspaces
+      summary: 获取工作空间列表
+      description: 获取用户有权访问的工作空间
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 成功获取工作空间列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workspace'
+
+    post:
+      tags:
+        - Workspaces
+      summary: 创建工作空间
+      description: 创建新的工作空间
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                is_public:
+                  type: boolean
+                  default: false
+                context:
+                  type: object
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 工作空间创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Workspace'
+
+  /workspaces/{workspace_id}:
+    get:
+      tags:
+        - Workspaces
+      summary: 获取工作空间详情
+      description: 获取指定工作空间的详细信息
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功获取工作空间详情
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Workspace'
+
+    put:
+      tags:
+        - Workspaces
+      summary: 更新工作空间
+      description: 更新工作空间信息
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                is_public:
+                  type: boolean
+      responses:
+        '200':
+          description: 工作空间更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Workspace'
+
+    delete:
+      tags:
+        - Workspaces
+      summary: 删除工作空间
+      description: 删除指定工作空间
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 工作空间删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /workspaces/{workspace_id}/permissions:
+    get:
+      tags:
+        - Workspaces
+      summary: 获取工作空间权限列表
+      description: 获取工作空间的权限配置
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 成功获取权限列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+
+    post:
+      tags:
+        - Workspaces
+      summary: 授予工作空间权限
+      description: 为用户授予工作空间权限
+      parameters:
+        - name: workspace_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - user_id
+                - permission_level
+              properties:
+                user_id:
+                  type: string
+                  format: uuid
+                permission_level:
+                  type: string
+                  enum: [viewer, editor, admin]
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: 权限授予成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+
+  /workflows:
+    get:
+      tags:
+        - Workflows
+      summary: 获取工作流列表
+      description: 获取所有工作流
+      responses:
+        '200':
+          description: 成功获取工作流列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Workflow'
+
+    post:
+      tags:
+        - Workflows
+      summary: 创建工作流
+      description: 创建新的工作流
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - dag
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                dag:
+                  type: object
+                workspace_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: 工作流创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Workflow'
+
+  /workflows/{workflow_id}/execute:
+    post:
+      tags:
+        - Workflows
+      summary: 执行工作流
+      description: 执行指定的工作流
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+      responses:
+        '200':
+          description: 工作流执行成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+
+  /messages:
+    post:
+      tags:
+        - Messages
+      summary: 发送消息
+      description: 发送新消息
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - message_type
+                - content
+              properties:
+                message_type:
+                  type: string
+                content:
+                  type: string
+                recipient_id:
+                  type: string
+                  format: uuid
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 消息发送成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Message'
+
+  /messages/user:
+    get:
+      tags:
+        - Messages
+      summary: 获取我的消息
+      description: 获取当前用户的所有消息
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 成功获取消息列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+
+  /messages/user/unread-count:
+    get:
+      tags:
+        - Messages
+      summary: 获取未读消息数
+      description: 获取当前用户的未读消息数量
+      responses:
+        '200':
+          description: 成功获取未读消息数
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      unread_count:
+                        type: integer

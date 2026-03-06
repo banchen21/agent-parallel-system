@@ -138,6 +138,7 @@ pub struct AgentResponse {
     pub capabilities: Vec<Capability>,
     pub current_load: i32,
     pub max_concurrent_tasks: i32,
+    pub success_rate: f64,
     pub last_heartbeat: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -188,8 +189,20 @@ pub struct TaskAssignmentResponse {
 impl Agent {
     /// 转换为响应格式
     pub fn to_response(&self) -> AgentResponse {
-        let capabilities: Vec<Capability> = serde_json::from_value(self.capabilities.clone())
-            .unwrap_or_default();
+        // 安全地解析 capabilities，如果失败则返回空数组
+        let capabilities: Vec<Capability> = match serde_json::from_value(self.capabilities.clone()) {
+            Ok(caps) => caps,
+            Err(_) => {
+                // 如果 capabilities 是数组但内容无效，尝试返回空数组
+                Vec::new()
+            }
+        };
+        
+        // 从 metadata 中获取成功率，默认为 1.0（100%）
+        let success_rate = self.metadata
+            .get("success_rate")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
         
         AgentResponse {
             id: self.id,
@@ -199,6 +212,7 @@ impl Agent {
             capabilities,
             current_load: self.current_load,
             max_concurrent_tasks: self.max_concurrent_tasks,
+            success_rate,
             last_heartbeat: self.last_heartbeat,
             created_at: self.created_at,
             updated_at: self.updated_at,

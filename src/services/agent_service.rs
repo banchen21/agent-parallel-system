@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+use log::debug;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -57,10 +58,10 @@ impl AgentService {
             Agent,
             r#"
             INSERT INTO agents (
-                name, description, status, capabilities, endpoints, 
-                limits, max_concurrent_tasks, metadata
+                name, description, status, capabilities, endpoints,
+                limits, max_concurrent_tasks, metadata, last_heartbeat
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             RETURNING *
             "#,
             request.name,
@@ -159,35 +160,31 @@ impl AgentService {
     /// 获取所有可用智能体
     pub async fn get_available_agents(
         &self,
-        capabilities: Option<Vec<String>>,
     ) -> Result<Vec<Agent>, AppError> {
-        let mut query = "
-            SELECT * FROM agents
-            WHERE status = 'online'
-            AND current_load < max_concurrent_tasks
-            AND last_heartbeat > NOW() - INTERVAL '5 minutes'
-        ".to_string();
         
-        if let Some(caps) = capabilities {
-            // 这里简化处理，实际应用中需要更复杂的JSON查询
-            query.push_str(&format!(" AND capabilities::text LIKE '%{}%'", caps.join("%")));
-        }
-        
-        query.push_str(" ORDER BY current_load ASC, last_heartbeat DESC");
-        
-        let agents = sqlx::query_as::<_, Agent>(&query)
-            .fetch_all(&self.db_pool)
-            .await?;
-        
+        let agents = sqlx::query_as!(
+            Agent,
+            r#"
+            SELECT
+                id, name, description, status as "status: AgentStatus",
+                capabilities, endpoints, limits, current_load,
+                max_concurrent_tasks, last_heartbeat, metadata,
+                created_at, updated_at
+            FROM agents
+            ORDER BY created_at DESC
+            "#
+        )
+        .fetch_all(&self.db_pool)
+        .await?;
+
         Ok(agents)
     }
     
     /// 根据能力获取最佳智能体
     pub async fn get_best_agent_for_capabilities(
         &self,
-        required_capabilities: &[String],
     ) -> Result<Option<Agent>, AppError> {
-        let available_agents = self.get_available_agents(Some(required_capabilities.to_vec())).await?;
+        let available_agents = self.get_available_agents().await?;
         
         // 选择负载最低的智能体
         let best_agent = available_agents
@@ -375,14 +372,31 @@ impl AgentService {
         Ok(stats_json)
     }
     
+    /// 删除智能体
+    pub async fn delete_agent(&self, agent_id: Uuid) -> Result<(), AppError> {
+        let result = sqlx::query!(
+            "DELETE FROM agents WHERE id = $1",
+            agent_id
+        )
+        .execute(&self.db_pool)
+        .await?;
+        
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound("智能体不存在".to_string()));
+        }
+        
+        tracing::info!("删除智能体: {}", agent_id);
+        Ok(())
+    }
+    
     /// 清理离线智能体
     pub async fn cleanup_offline_agents(&self) -> Result<u64, AppError> {
         // 标记长时间没有心跳的智能体为离线
         let result = sqlx::query!(
             r#"
-            UPDATE agents 
+            UPDATE agents
             SET status = 'offline', updated_at = NOW()
-            WHERE status = 'online' 
+            WHERE status = 'online'
             AND last_heartbeat < NOW() - INTERVAL '10 minutes'
             "#
         )

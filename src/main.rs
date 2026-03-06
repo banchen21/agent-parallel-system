@@ -12,7 +12,7 @@ use tower_http::{
 use tracing::{info};
 
 use agent_parallel_system::{
-    api::routes,
+    api::{routes, swagger_routes},
     core::{config, database, logging, realtime_logging},
     workers::task_worker,
 };
@@ -105,7 +105,8 @@ async fn start_server() -> anyhow::Result<()> {
         .merge(routes::agent_routes())
         .merge(routes::workspace_routes())
         .merge(routes::workflow_routes())
-        .merge(routes::message_routes());
+        .merge(routes::message_routes())
+        .merge(swagger_routes());
         // 实时日志路由暂时禁用，等待完整实现
         // .merge(routes::realtime_log_routes());
 

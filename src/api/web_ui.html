@@ -441,6 +441,21 @@ ${curl}`;
         const rendered = `HTTP ${res.status} ${res.statusText}\n\nHeaders:\n${[...res.headers.entries()].map(([k,v]) => `${k}: ${v}`).join("\n")}\n\nBody:\n${txt}`;
         ui.http.textContent = rendered;
         ui.http.className = res.ok ? "ok" : "err";
+
+        // 自动保存登录/注册/刷新返回的 tokens
+        if (res.ok && (path.includes('/auth/login') || path.includes('/auth/register') || path.includes('/auth/refresh'))) {
+          try {
+            const data = JSON.parse(txt);
+            if (data.data) {
+              if (data.data.access_token) {
+                saveTokens(data.data.access_token, data.data.refresh_token);
+                ui.http.textContent = rendered + "\n\n✓ Tokens 已自动保存并启用自动刷新";
+              }
+            }
+          } catch (e) {
+            // 忽略 JSON 解析错误
+          }
+        }
       } catch (e) {
         ui.http.textContent = "请求失败: " + e;
         ui.http.className = "err";
@@ -468,11 +483,132 @@ ${curl}`;
       checkHealth();
     }
 
+    // Token 自动刷新相关
+    let refreshTimer = null;
+
+    function parseJwt(token) {
+      try {
+        const base64Url = token.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(atob(base64).split('').map(c =>
+          '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+        ).join(''));
+        return JSON.parse(jsonPayload);
+      } catch (e) {
+        console.error('解析 JWT 失败:', e);
+        return null;
+      }
+    }
+
+    function getTokenExpiry(token) {
+      const payload = parseJwt(token);
+      if (payload && payload.exp) {
+        return payload.exp * 1000; // 转换为毫秒
+      }
+      return null;
+    }
+
+    async function refreshAccessToken() {
+      const refreshToken = localStorage.getItem("aps_refresh_token");
+      if (!refreshToken) {
+        console.log('没有 refresh token，无法自动刷新');
+        return false;
+      }
+
+      try {
+        const response = await fetch(`${ui.base.value}/api/v1/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshToken })
+        });
+
+        if (!response.ok) {
+          throw new Error(`刷新失败: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (result.data && result.data.access_token) {
+          // 更新 tokens
+          ui.token.value = result.data.access_token;
+          localStorage.setItem("aps_token", result.data.access_token);
+          
+          if (result.data.refresh_token) {
+            localStorage.setItem("aps_refresh_token", result.data.refresh_token);
+          }
+
+          console.log('Token 自动刷新成功');
+          scheduleTokenRefresh(result.data.access_token);
+          return true;
+        }
+        return false;
+      } catch (e) {
+        console.error('自动刷新 token 失败:', e);
+        ui.http.textContent = `Token 自动刷新失败: ${e.message}\n请重新登录`;
+        ui.http.className = "warn";
+        return false;
+      }
+    }
+
+    function scheduleTokenRefresh(token) {
+      // 清除之前的定时器
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+
+      const expiry = getTokenExpiry(token);
+      if (!expiry) {
+        console.log('无法获取 token 过期时间');
+        return;
+      }
+
+      const now = Date.now();
+      const timeUntilExpiry = expiry - now;
+      
+      // 在过期前 5 分钟刷新（或剩余时间的 80%，取较小值）
+      const refreshBefore = Math.min(5 * 60 * 1000, timeUntilExpiry * 0.2);
+      const refreshIn = timeUntilExpiry - refreshBefore;
+
+      if (refreshIn > 0) {
+        console.log(`Token 将在 ${Math.round(refreshIn / 1000 / 60)} 分钟后自动刷新`);
+        refreshTimer = setTimeout(async () => {
+          console.log('开始自动刷新 token...');
+          await refreshAccessToken();
+        }, refreshIn);
+      } else {
+        console.log('Token 即将过期，立即刷新');
+        refreshAccessToken();
+      }
+    }
+
+    function saveTokens(accessToken, refreshToken) {
+      if (accessToken) {
+        ui.token.value = accessToken;
+        localStorage.setItem("aps_token", accessToken);
+        scheduleTokenRefresh(accessToken);
+      }
+      if (refreshToken) {
+        localStorage.setItem("aps_refresh_token", refreshToken);
+      }
+    }
+
     function init() {
       ui.base.value = `${location.protocol}//${location.host}`;
       ui.token.value = localStorage.getItem("aps_token") || "";
 
-      ui.token.addEventListener("input", () => localStorage.setItem("aps_token", ui.token.value));
+      // 启动时检查并设置自动刷新
+      if (ui.token.value) {
+        scheduleTokenRefresh(ui.token.value);
+      }
+
+      ui.token.addEventListener("input", () => {
+        const token = ui.token.value;
+        localStorage.setItem("aps_token", token);
+        if (token) {
+          scheduleTokenRefresh(token);
+        }
+      });
+
       ui.send.onclick = sendRequest;
       ui.checkHealth.onclick = checkHealth;
       ui.useExample.onclick = () => {

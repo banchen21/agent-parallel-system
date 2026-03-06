@@ -6,8 +6,10 @@ use axum::{
     routing::{get, post, put, delete},
     Router,
 };
+use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing_subscriber::field::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -41,22 +43,10 @@ struct UiEndpoint {
     notes: &'static str,
 }
 
-#[derive(Serialize)]
-struct UiSpec {
-    name: &'static str,
-    version: &'static str,
-    base_url: &'static str,
-    generated_at: String,
-    endpoints: Vec<UiEndpoint>,
-}
-
 /// Web UI 路由
 pub fn ui_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(ui_index))
-        .route("/docs", get(ui_index))
-        .route("/ui/endpoints", get(ui_endpoints))
-        .route("/ui/spec", get(ui_spec))
 }
 
 /// 健康检查路由
@@ -91,7 +81,7 @@ pub fn task_routes() -> Router<AppState> {
 pub fn agent_routes() -> Router<AppState> {
     Router::new()
         .route("/agents", get(get_agents).post(register_agent))
-        .route("/agents/:agent_id", get(get_agent))
+        .route("/agents/:agent_id", get(get_agent).delete(delete_agent))
         .route("/agents/:agent_id/heartbeat", post(update_heartbeat))
         .route("/agents/:agent_id/status", put(update_agent_status))
         .route("/agents/:agent_id/assign-task", post(assign_task_to_agent))
@@ -147,20 +137,6 @@ async fn ready_check() -> &'static str {
 
 async fn ui_index() -> Html<&'static str> {
     Html(include_str!("web_ui.html"))
-}
-
-async fn ui_endpoints() -> Json<Vec<UiEndpoint>> {
-    Json(build_ui_endpoints())
-}
-
-async fn ui_spec() -> Json<UiSpec> {
-    Json(UiSpec {
-        name: "Agent Parallel System",
-        version: env!("CARGO_PKG_VERSION"),
-        base_url: "/",
-        generated_at: chrono::Utc::now().to_rfc3339(),
-        endpoints: build_ui_endpoints(),
-    })
 }
 
 fn build_ui_endpoints() -> Vec<UiEndpoint> {
@@ -895,11 +871,6 @@ struct BatchMessageIdsRequest {
 }
 
 #[derive(Deserialize)]
-struct AgentListQuery {
-    capabilities: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct UpdateAgentStatusRequest {
     status: AgentStatus,
 }
@@ -1141,17 +1112,34 @@ async fn get_subtasks(
 async fn get_agents(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<AgentListQuery>,
 ) -> Result<Json<Value>, AppError> {
     let _ = extract_user_id(&headers)?;
-    let caps = query.capabilities.map(|v| {
-        v.split(',')
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>()
-    });
-    let agents = state.agent_service.get_available_agents(caps).await?;
-    let data: Vec<_> = agents.into_iter().map(|a| a.to_response()).collect();
+    let agents = state.agent_service.get_available_agents().await?;
+    
+    let data: Vec<Value> = agents.into_iter().map(|a| {
+        let capabilities: Vec<serde_json::Value> = serde_json::from_value(a.capabilities.clone())
+            .unwrap_or_default();
+        
+        let success_rate = a.metadata
+            .get("success_rate")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0);
+        
+        json!({
+            "id": a.id,
+            "name": a.name,
+            "description": a.description,
+            "status": a.status.to_string(),
+            "capabilities": capabilities,
+            "current_load": a.current_load,
+            "max_concurrent_tasks": a.max_concurrent_tasks,
+            "success_rate": success_rate,
+            "last_heartbeat": a.last_heartbeat,
+            "created_at": a.created_at,
+            "updated_at": a.updated_at,
+        })
+    }).collect();
+    
     Ok(success_response(json!(data), "智能体列表获取成功"))
 }
 
@@ -1177,6 +1165,16 @@ async fn get_agent(
         .await?
         .ok_or_else(|| AppError::NotFound("智能体不存在".to_string()))?;
     Ok(success_response(json!(agent.to_response()), "智能体详情获取成功"))
+}
+
+async fn delete_agent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    let _ = extract_user_id(&headers)?;
+    state.agent_service.delete_agent(agent_id).await?;
+    Ok(success_response(json!({}), "智能体删除成功"))
 }
 
 async fn update_heartbeat(
