@@ -5,6 +5,13 @@ pub mod workspace_service;
 pub mod orchestrator_service;
 pub mod message_service;
 pub mod workflow_service;
+pub mod chat_service;
+pub mod channel_service;
+pub mod llm_client;
+pub mod channel_adapter;
+pub mod message_router;
+pub mod graph_db;
+pub mod memory_service;
 
 // 重新导出服务
 pub use auth_service::AuthService;
@@ -14,3 +21,10 @@ pub use workspace_service::WorkspaceService;
 pub use orchestrator_service::OrchestratorService;
 pub use message_service::MessageService;
 pub use workflow_service::WorkflowService;
+pub use chat_service::ChatService;
+pub use channel_service::ChannelService;
+pub use llm_client::LLMClient;
+pub use channel_adapter::{ChannelAdapter, ChannelAdapterFactory, ChannelMessage, ChannelMessageResponse};
+pub use message_router::MessageRouterService;
+pub use graph_db::GraphDBClient;
+pub use memory_service::MemoryService;

@@ -30,6 +30,9 @@ use crate::{
     AppState,
 };
 
+mod chat_routes;
+mod channel_routes;
+
 #[derive(Serialize)]
 struct UiEndpoint {
     group: &'static str,
@@ -109,6 +112,28 @@ pub fn workflow_routes() -> Router<AppState> {
         .route("/workflows/:workflow_id/execute", post(execute_workflow))
         .route("/workflows/:workflow_id/executions", get(get_workflow_executions))
         .route("/workflows/:workflow_id/executions/:execution_id", get(get_workflow_execution))
+}
+
+/// 聊天路由
+pub fn chat_routes() -> Router<AppState> {
+    Router::new()
+        .route("/chat/sessions", post(chat_routes::create_chat_session))
+        .route("/chat/sessions/:channel_user_id", get(chat_routes::get_user_session))
+        .route("/chat/sessions/:session_id", get(chat_routes::get_chat_session))
+        .route("/chat/sessions/:session_id/messages", get(chat_routes::get_session_messages))
+        .route("/chat/messages", post(chat_routes::send_chat_message))
+        .route("/chat/sessions/:session_id/close", post(chat_routes::close_chat_session))
+}
+
+/// 通道路由
+pub fn channel_routes() -> Router<AppState> {
+    Router::new()
+        .route("/channels", post(channel_routes::create_channel_config).get(channel_routes::get_active_channels))
+        .route("/channels/:config_id", get(channel_routes::get_channel_config).put(channel_routes::update_channel_config))
+        .route("/channels/users/:user_id", get(channel_routes::get_channel_user))
+        .route("/channels/users/:channel_user_id/bind/:system_user_id", post(channel_routes::bind_channel_user))
+        .route("/webhooks/telegram", post(channel_routes::telegram_webhook))
+        .route("/webhooks/discord", post(channel_routes::discord_webhook))
 }
 
 /// 消息路由

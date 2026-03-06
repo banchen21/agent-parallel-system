@@ -22,6 +22,11 @@ use crate::{
         orchestrator_service::OrchestratorService,
         workflow_service::WorkflowService,
         message_service::MessageService,
+        chat_service::ChatService,
+        channel_service::ChannelService,
+        message_router::MessageRouterService,
+        graph_db::GraphDBClient,
+        memory_service::MemoryService,
     },
 };
 
@@ -35,6 +40,11 @@ pub struct AppState {
     pub orchestrator_service: Arc<OrchestratorService>,
     pub workflow_service: Arc<WorkflowService>,
     pub message_service: Arc<MessageService>,
+    pub chat_service: Arc<ChatService>,
+    pub channel_service: Arc<ChannelService>,
+    pub message_router_service: Arc<MessageRouterService>,
+    pub graph_db_client: Arc<GraphDBClient>,
+    pub memory_service: Arc<MemoryService>,
     pub realtime_log_manager: Option<Arc<RealtimeLogManager>>,
     pub db_pool: PgPool,
     pub redis_pool: bb8::Pool<RedisConnectionManager>,
@@ -52,6 +62,20 @@ impl AppState {
         ));
         let workflow_service = Arc::new(WorkflowService::new(db_pool.clone()));
         let message_service = Arc::new(MessageService::new(db_pool.clone(), redis_pool.clone()));
+        let chat_service = Arc::new(ChatService::new(db_pool.clone()));
+        let channel_service = Arc::new(ChannelService::new(db_pool.clone()));
+        let message_router_service = Arc::new(MessageRouterService::new(
+            db_pool.clone(),
+            chat_service.clone(),
+        ));
+        let graph_db_client = Arc::new(GraphDBClient::new(
+            "bolt://localhost:7687".to_string(),
+            Some("password".to_string()),
+        ));
+        let memory_service = Arc::new(MemoryService::new(
+            "bolt://localhost:7687".to_string(),
+            Some("password".to_string()),
+        ));
 
         Self {
             auth_service,
@@ -61,6 +85,11 @@ impl AppState {
             orchestrator_service,
             workflow_service,
             message_service,
+            chat_service,
+            channel_service,
+            message_router_service,
+            graph_db_client,
+            memory_service,
             realtime_log_manager: None,
             db_pool,
             redis_pool,
