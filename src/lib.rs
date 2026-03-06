@@ -66,7 +66,8 @@ impl AppState {
         let channel_service = Arc::new(ChannelService::new(db_pool.clone()));
         let message_router_service = Arc::new(MessageRouterService::new(
             db_pool.clone(),
-            chat_service.clone(),
+            (*chat_service).clone(),
+            (*channel_service).clone(),
         ));
         let graph_db_client = Arc::new(GraphDBClient::new(
             "bolt://localhost:7687".to_string(),

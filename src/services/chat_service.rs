@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     core::errors::AppError,
-    models::chat::{ChatSession, ChatMessage, CreateChatSessionRequest, SendChatMessageRequest, LLMConfig},
+    models::chat::{ChatSession, ChatMessage, CreateChatSessionRequest, LLMConfig},
 };
 
 /// 聊天服务

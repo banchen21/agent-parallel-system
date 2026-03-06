@@ -73,11 +73,12 @@ pub async fn send_chat_message(
 ) -> Result<Json<Value>, AppError> {
     let _ = extract_user_id(&headers)?;
     
-    // 获取或创建会话
+    // 获取会话
     let session = state
         .chat_service
-        .get_or_create_global_session(request.channel_user_id)
-        .await?;
+        .get_session(request.session_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("聊天会话不存在".to_string()))?;
     
     // 保存用户消息
     let user_message = state

@@ -51,27 +51,11 @@ impl MessageRouterService {
             )
             .await?;
 
-        // 2. 获取或创建聊天会话
-        let sessions = self
+        // 2. 获取或创建全局聊天会话
+        let session = self
             .chat_service
-            .get_user_sessions(channel_user.id)
+            .get_or_create_global_session(channel_user.id)
             .await?;
-
-        let session = if let Some(s) = sessions.first() {
-            s.clone()
-        } else {
-            self.chat_service
-                .create_session(crate::models::chat::CreateChatSessionRequest {
-                    channel_user_id: channel_user.id,
-                    title: Some(format!("Chat with {}", message.channel_username.as_deref().unwrap_or("User"))),
-                    model: None,
-                    system_prompt: None,
-                    temperature: None,
-                    max_tokens: None,
-                    context_window: None,
-                })
-                .await?
-        };
 
         // 3. 保存用户消息
         self.chat_service
@@ -126,7 +110,7 @@ impl MessageRouterService {
         channel_config_id: Uuid,
         channel_user_id: &str,
         command: &str,
-        args: Vec<String>,
+        _args: Vec<String>,
     ) -> Result<String, AppError> {
         match command {
             "new" => {
