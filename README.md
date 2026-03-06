@@ -1,210 +1,192 @@
-# 基于LLM的多智能体并行协作系统
+# Agent Parallel System
 
-一个使用Rust构建的高性能、可扩展的多智能体并行协作系统，支持LLM集成、任务编排和实时通信。
+<div align="center">
 
-> **项目状态**: 开发中 (完成度约 55-65%)
->
-> 当前处于从"核心算法原型"向"完整工具软件"转化的关键阶段，已实现DAG编排、错误恢复和实时日志推送
+**基于 Rust 的高性能多智能体并行协作系统**
 
-## 项目完成度概览
+[![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
 
-| 模块 | 完成度 | 状态描述 |
-|------|--------|----------|
-| 核心后端逻辑 | 95% | 并行架构、任务分发、状态管理、DAG编排、错误恢复、实时日志已实现 |
-| 接口适配层 | 40% | API骨架已建立，实时通信(SSE/WebSocket)已实现 |
-| 前端界面 | 15% | 静态原型完成，数据绑定待实现 |
-| 数据持久化 | 5% | 内存模式运行，数据库集成待开发 |
+[English](README_EN.md) | 简体中文
 
-## 功能特性
+</div>
 
-### 已实现功能
-- 🚀 **高性能架构**: 使用Rust和异步编程构建
-- 🤖 **多智能体协作**: 支持多个智能体并行处理任务
-- 🔄 **任务编排**: 智能任务分配和依赖管理
-- 🧩 **DAG编排**: 复杂任务依赖关系的有向无环图编排
-- 🔧 **错误恢复**: 自动重试、检查点和状态回滚机制
-- 📊 **实时日志**: SSE/WebSocket实时日志推送和监控
-- 🔒 **安全认证**: JWT认证和权限管理
-- 🐳 **容器化部署**: 支持Docker和Docker Compose
-- 🔄 **实时通信**: WebSocket/SSE实时日志推送
+---
 
-### 规划中功能
-- 🧠 **LLM集成**: 集成OpenAI等大语言模型
-- 📈 **高级监控**: 性能指标收集和可视化
-- 🗄️ **数据持久化**: 完整的数据库集成
+## 📖 项目简介
 
-## 技术栈
+Agent Parallel System 是一个使用 Rust 构建的高性能、可扩展的多智能体并行协作系统。系统支持复杂任务的智能分解、多智能体协同执行、实时通信和完整的生命周期管理，适用于需要多个 AI 智能体协作完成复杂任务的场景。
 
-- **后端**: Rust + Axum
-- **数据库**: PostgreSQL 15 (规划中)
-- **缓存/消息队列**: Redis 7 (已集成)
-- **认证**: JWT + Argon2/Bcrypt (已实现)
-- **部署**: Docker + Docker Compose
-- **监控**: 结构化日志 + 实时日志推送 + 健康检查
-- **实时通信**: SSE + WebSocket
+### 核心特性
 
-## 快速开始
+- 🚀 **高性能架构** - 基于 Rust + Tokio 异步运行时，支持高并发处理
+- 🤖 **多智能体协作** - 支持多个智能体并行处理任务，智能负载均衡
+- 🔄 **DAG 任务编排** - 有向无环图任务依赖管理，支持复杂工作流
+- 🛡️ **容错与恢复** - 自动重试、检查点、状态回滚机制
+- 📊 **实时监控** - SSE/WebSocket 实时日志推送和任务状态监控
+- 🔐 **安全认证** - JWT + Argon2/Bcrypt 加密，RBAC 权限控制
+- 💬 **多渠道集成** - 支持 Telegram、Discord、QQ、Web 等多种通信渠道
+- 🧠 **LLM 集成** - 支持 OpenAI、Ollama 等多种大语言模型
+- 🐳 **容器化部署** - Docker + Docker Compose 一键部署
+- 📈 **可扩展设计** - 模块化架构，易于扩展和定制
+
+---
+
+## 🏗️ 系统架构
+
+### 整体架构图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     客户端层 (Client Layer)                   │
+├─────────────────────────────────────────────────────────────┤
+│  Web UI │  REST API │  Telegram │  Discord │  WebSocket     │
+└─────────────────────────────────────────────────────────────┘
+                               │
+┌─────────────────────────────────────────────────────────────┐
+│                   API 网关层 (API Gateway)                   │
+├─────────────────────────────────────────────────────────────┤
+│  认证授权 │  速率限制 │  请求路由 │  CORS 处理               │
+└─────────────────────────────────────────────────────────────┘
+                               │
+┌─────────────────────────────────────────────────────────────┐
+│                   核心服务层 (Core Services)                 │
+├──────────────┬──────────────┬──────────────┬───────────────┤
+│  任务服务    │  智能体服务   │  工作空间服务 │  编排器服务    │
+│  工作流服务  │  消息服务     │  聊天服务     │  通道服务      │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+                               │
+┌─────────────────────────────────────────────────────────────┐
+│                 通信层 (Communication Layer)                 │
+├──────────────┬──────────────┬──────────────┬───────────────┤
+│  Redis 队列  │  WebSocket   │  SSE 推送    │  消息路由      │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+                               │
+┌─────────────────────────────────────────────────────────────┐
+│                   基础设施层 (Infrastructure)                │
+├──────────────┬──────────────┬──────────────┬───────────────┤
+│  PostgreSQL  │  Redis       │  对象存储     │  LLM 服务      │
+└──────────────┴──────────────┴──────────────┴───────────────┘
+```
+
+### 核心模块
+
+#### 1. 核心层 (Core)
+- **配置管理** ([`config.rs`](src/core/config.rs)) - 统一配置加载和管理
+- **数据库** ([`database.rs`](src/core/database.rs)) - PostgreSQL 和 Redis 连接池
+- **错误处理** ([`errors.rs`](src/core/errors.rs)) - 统一错误类型定义
+- **DAG 编排** ([`dag.rs`](src/core/dag.rs)) - 任务依赖关系管理
+- **错误恢复** ([`error_recovery.rs`](src/core/error_recovery.rs)) - 自动重试和恢复机制
+- **实时日志** ([`realtime_logging.rs`](src/core/realtime_logging.rs)) - SSE/WebSocket 日志推送
+- **安全模块** ([`security.rs`](src/core/security.rs)) - JWT 和密码加密
+
+#### 2. 服务层 (Services)
+- **认证服务** ([`auth_service.rs`](src/services/auth_service.rs)) - 用户注册、登录、JWT 管理
+- **任务服务** ([`task_service.rs`](src/services/task_service.rs)) - 任务 CRUD 和生命周期管理
+- **智能体服务** ([`agent_service.rs`](src/services/agent_service.rs)) - 智能体注册、健康检查、负载均衡
+- **工作空间服务** ([`workspace_service.rs`](src/services/workspace_service.rs)) - 工作空间和权限管理
+- **编排器服务** ([`orchestrator_service.rs`](src/services/orchestrator_service.rs)) - 任务分配和智能体协调
+- **工作流服务** ([`workflow_service.rs`](src/services/workflow_service.rs)) - 工作流定义和执行
+- **消息服务** ([`message_service.rs`](src/services/message_service.rs)) - 智能体间消息传递
+- **聊天服务** ([`chat_service.rs`](src/services/chat_service.rs)) - 聊天会话和消息管理
+- **通道服务** ([`channel_service.rs`](src/services/channel_service.rs)) - 多渠道集成管理
+- **LLM 客户端** ([`llm_client.rs`](src/services/llm_client.rs)) - 大语言模型调用封装
+- **图数据库** ([`graph_db.rs`](src/services/graph_db.rs)) - 知识图谱存储
+- **记忆服务** ([`memory_service.rs`](src/services/memory_service.rs)) - 上下文记忆管理
+
+#### 3. 数据模型 (Models)
+- **用户模型** ([`user.rs`](src/models/user.rs)) - 用户、会话、权限
+- **任务模型** ([`task.rs`](src/models/task.rs)) - 任务定义、状态、依赖
+- **智能体模型** ([`agent.rs`](src/models/agent.rs)) - 智能体配置、能力、状态
+- **工作空间模型** ([`workspace.rs`](src/models/workspace.rs)) - 工作空间、成员、权限
+- **消息模型** ([`message.rs`](src/models/message.rs)) - 各类消息类型
+- **工作流模型** ([`workflow.rs`](src/models/workflow.rs)) - 工作流定义和执行
+- **通道模型** ([`channel.rs`](src/models/channel.rs)) - 通道配置和用户映射
+- **聊天模型** ([`chat.rs`](src/models/chat.rs)) - 聊天会话和消息
+
+#### 4. API 层 (API)
+- **路由定义** ([`routes.rs`](src/api/routes.rs)) - RESTful API 端点
+- **Swagger 文档** ([`swagger.rs`](src/api/swagger.rs)) - OpenAPI 规范
+- **Web UI** ([`web_ui.html`](src/api/web_ui.html)) - 简单的 Web 界面
+
+#### 5. 后台工作器 (Workers)
+- **任务工作器** ([`task_worker.rs`](src/workers/task_worker.rs)) - 后台任务处理
+- **清理工作器** ([`cleanup_worker.rs`](src/workers/cleanup_worker.rs)) - 定期数据清理
+- **通知工作器** ([`notification_worker.rs`](src/workers/notification_worker.rs)) - 异步通知发送
+
+---
+
+## 🗄️ 数据库架构
+
+系统使用 PostgreSQL 作为主数据库，包含以下核心表：
+
+### 核心表结构
+
+- **users** - 用户信息和认证
+- **user_sessions** - 用户会话管理
+- **workspaces** - 工作空间定义
+- **workspace_members** - 工作空间成员
+- **workspace_permissions** - 细粒度权限
+- **tasks** - 任务定义和状态
+- **task_dependencies** - 任务依赖关系
+- **agents** - 智能体注册信息
+- **agent_assignments** - 智能体任务分配
+- **messages** - 消息记录
+- **workflows** - 工作流定义
+- **workflow_executions** - 工作流执行记录
+- **channel_configs** - 通道配置
+- **channel_users** - 通道用户映射
+- **chat_sessions** - 聊天会话
+- **chat_messages** - 聊天消息
+- **llm_configs** - LLM 配置
+
+详细的数据库架构文档请参考 [`migrations/database-schema.md`](migrations/database-schema.md)
+
+---
+
+## 🚀 快速开始
 
 ### 环境要求
 
-- Docker 20.10+
-- Docker Compose 2.0+
+- **Rust** 1.70+
+- **PostgreSQL** 15+
+- **Redis** 7+
+- **Docker** 20.10+ (可选)
+- **Docker Compose** 2.0+ (可选)
 
-### 启动系统
+### 方式一：Docker Compose 部署（推荐）
 
-1. 克隆项目
+1. **克隆项目**
 ```bash
 git clone <repository-url>
 cd agent-parallel-system
 ```
 
-2. 配置环境变量
+2. **配置环境变量**
 ```bash
 cp .env.example .env
-# 编辑.env文件配置您的环境变量
+# 编辑 .env 文件，配置数据库和 Redis 连接信息
 ```
 
-3. 启动服务
+3. **启动服务**
 ```bash
 ./scripts/start.sh
 ```
 
-4. 访问系统
-- API服务: http://localhost:8000
-- API文档: http://localhost:8000/docs
+4. **访问系统**
+- API 服务: http://localhost:8000
+- API 文档: http://localhost:8000/docs
 - 健康检查: http://localhost:8000/health
 
-### 手动启动
+### 方式二：本地开发部署
 
-如果您想手动启动服务：
-
+1. **安装依赖**
 ```bash
-# 启动数据库和Redis
-docker compose up -d postgres redis
-
-# 运行数据库迁移
-docker compose run --rm api ./agent-parallel-system migrate
-
-# 启动API服务
-docker compose up -d api
-
-# 启动后台工作器
-docker compose up -d worker
-```
-
-## 项目结构
-
-```
-agent-parallel-system/
-├── src/                    # Rust源代码
-│   ├── core/              # 核心模块（配置、数据库、错误处理）
-│   ├── models/            # 数据模型
-│   ├── services/          # 业务逻辑服务
-│   ├── api/               # API路由
-│   ├── middleware/        # 中间件
-│   ├── utils/             # 工具函数
-│   └── workers/           # 后台工作器
-├── migrations/            # 数据库迁移文件
-├── config/                # 配置文件
-├── scripts/               # 部署脚本
-├── tests/                 # 测试文件
-├── storage/               # 文件存储
-├── logs/                  # 日志文件
-├── Dockerfile             # Docker构建文件
-├── docker-compose.yml     # Docker Compose配置
-└── Cargo.toml            # Rust依赖配置
-```
-
-## API接口 (开发中)
-
-### API文档
-
-- **完整API规范**: [api-specification.md](api-specification.md)
-- **Web控制台**: http://localhost:8000/docs
-- **机器可读接口**: http://localhost:8000/ui/spec
-- **接口列表**: http://localhost:8000/ui/endpoints
-
-### 接口总览 (规划中)
-
-#### 系统与文档
-- `GET /health` - 健康检查
-- `GET /ready` - 就绪检查
-- `GET /ui/spec` - API规范JSON
-- `GET /ui/endpoints` - 接口列表JSON
-
-#### 认证接口
-- `POST /auth/register` - 用户注册
-- `POST /auth/login` - 用户登录
-- `POST /auth/refresh` - 刷新令牌
-- `POST /auth/logout` - 用户登出
-- `GET /auth/me` - 获取当前用户
-- `POST /auth/change-password` - 修改密码
-
-#### 任务接口
-- `POST /tasks` - 创建任务（自动分配）
-- `GET /tasks` - 获取任务列表
-- `GET /tasks/{task_id}` - 获取任务详情
-- `PUT /tasks/{task_id}` - 更新任务
-- `DELETE /tasks/{task_id}` - 删除任务
-- `PUT /tasks/{task_id}/status` - 更新任务状态
-- `POST /tasks/{task_id}/decompose` - 任务分解
-- `GET /tasks/{task_id}/subtasks` - 查询子任务
-
-#### 智能体接口
-- `GET /agents` - 获取智能体列表
-- `POST /agents` - 注册智能体
-- `GET /agents/{agent_id}` - 获取智能体详情
-- `POST /agents/{agent_id}/heartbeat` - 上报心跳
-- `PUT /agents/{agent_id}/status` - 更新状态
-- `POST /agents/{agent_id}/assign-task` - 指定任务分配
-- `POST /agents/{agent_id}/complete-task` - 上报任务完成
-- `GET /agents/stats` - 获取智能体统计
-
-#### 工作空间接口
-- `POST /workspaces` - 创建工作空间
-- `GET /workspaces` - 获取工作空间列表
-- `GET /workspaces/{workspace_id}` - 获取工作空间详情
-- `PUT /workspaces/{workspace_id}` - 更新工作空间
-- `DELETE /workspaces/{workspace_id}` - 删除工作空间
-- `GET /workspaces/{workspace_id}/permissions` - 权限列表
-- `POST /workspaces/{workspace_id}/permissions` - 授予权限
-- `DELETE /workspaces/{workspace_id}/permissions/{permission_id}` - 撤销权限
-- `GET /workspaces/{workspace_id}/documents` - 文档列表
-- `GET /workspaces/{workspace_id}/tools` - 工具列表
-- `GET /workspaces/{workspace_id}/stats` - 空间统计
-
-#### 工作流接口
-- `GET /workflows` - 工作流列表
-- `POST /workflows` - 创建工作流
-- `GET /workflows/{workflow_id}` - 工作流详情
-- `DELETE /workflows/{workflow_id}` - 删除工作流
-- `POST /workflows/{workflow_id}/execute` - 触发执行
-- `GET /workflows/{workflow_id}/executions` - 执行记录列表
-- `GET /workflows/{workflow_id}/executions/{execution_id}` - 执行记录详情
-
-#### 消息接口
-- `POST /messages` - 发送消息
-- `GET /messages/user` - 当前用户消息列表
-- `GET /messages/user/unread-count` - 当前用户未读数量
-- `GET /messages/agent/{agent_id}` - 智能体消息列表
-- `GET /messages/task/{task_id}` - 任务消息列表
-- `POST /messages/{message_type}/{message_id}/read` - 标记已读
-- `DELETE /messages/{message_type}/{message_id}` - 删除消息
-- `POST /messages/{message_type}/read-batch` - 批量标记已读
-- `POST /messages/{message_type}/delete-batch` - 批量删除
-- `POST /messages/broadcast` - 发送系统广播
-
-## 开发指南
-
-### 本地开发环境
-
-1. 安装Rust工具链
-```bash
+# 安装 Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
 
-2. 安装PostgreSQL和Redis
-```bash
+# 安装 PostgreSQL 和 Redis
 # Ubuntu/Debian
 sudo apt-get install postgresql redis-server
 
@@ -212,190 +194,437 @@ sudo apt-get install postgresql redis-server
 brew install postgresql redis
 ```
 
-3. 运行应用
+2. **配置数据库**
 ```bash
-# 启动数据库和Redis
-docker compose up -d postgres redis
+# 创建数据库
+createdb agent_system
 
-# 运行数据库迁移
-cargo run -- migrate
-
-# 启动开发服务器
-cargo run -- server
-
-# 启动后台工作器
-cargo run -- worker
+# 设置环境变量
+export DATABASE_URL="postgres://postgres:password@localhost:5432/agent_system"
+export REDIS_URL="redis://localhost:6379"
 ```
 
-### 测试
+3. **运行数据库迁移**
+```bash
+# 安装 sqlx-cli
+cargo install sqlx-cli --no-default-features --features postgres
+
+# 运行迁移
+sqlx migrate run
+
+# 生成查询缓存（用于编译时 SQL 验证）
+cargo sqlx prepare
+```
+
+4. **编译和运行**
+```bash
+# 开发模式
+cargo run
+
+# 生产模式
+cargo build --release
+./target/release/agent-parallel-system
+```
+
+---
+
+## 📚 API 文档
+
+### 认证接口
+
+#### 用户注册
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
+
+{
+  "username": "user123",
+  "email": "user@example.com",
+  "password": "secure_password"
+}
+```
+
+#### 用户登录
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "user123",
+  "password": "secure_password"
+}
+```
+
+### 任务接口
+
+#### 创建任务
+```http
+POST /api/v1/tasks
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "workspace_id": "uuid",
+  "title": "任务标题",
+  "description": "任务描述",
+  "priority": "high",
+  "requirements": {}
+}
+```
+
+#### 查询任务
+```http
+GET /api/v1/tasks/{task_id}
+Authorization: Bearer <token>
+```
+
+### 智能体接口
+
+#### 注册智能体
+```http
+POST /api/v1/agents
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "智能体名称",
+  "agent_type": "llm",
+  "capabilities": ["coding", "analysis"],
+  "workspace_id": "uuid"
+}
+```
+
+### 工作流接口
+
+#### 创建工作流
+```http
+POST /api/v1/workflows
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "工作流名称",
+  "workspace_id": "uuid",
+  "definition": {
+    "steps": [...]
+  }
+}
+```
+
+#### 执行工作流
+```http
+POST /api/v1/workflows/{workflow_id}/execute
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "input": {},
+  "options": {}
+}
+```
+
+完整的 API 文档请访问: http://localhost:8000/docs
+
+---
+
+## 🔧 配置说明
+
+系统配置文件位于 [`config/default.toml`](config/default.toml)，主要配置项：
+
+### 服务器配置
+```toml
+[server]
+host = "0.0.0.0"
+port = 8000
+workers = 4
+api_prefix = "/api/v1"
+```
+
+### 数据库配置
+```toml
+[database]
+url = "postgres://postgres:password@localhost:5432/agent_system"
+max_connections = 20
+min_connections = 5
+```
+
+### Redis 配置
+```toml
+[redis]
+url = "redis://localhost:6379"
+pool_size = 10
+```
+
+### JWT 配置
+```toml
+[jwt]
+secret = "your-secret-key"
+access_token_expire_minutes = 30
+refresh_token_expire_days = 7
+```
+
+### LLM 配置
+```toml
+[openai]
+api_key = "your-openai-api-key"
+model = "gpt-4"
+max_tokens = 4096
+temperature = 0.7
+```
+
+---
+
+## 🧪 测试
 
 ```bash
-# 运行单元测试
+# 运行所有测试
 cargo test
 
-# 运行集成测试
-cargo test --test integration
+# 运行特定测试
+cargo test test_name
 
-# 运行所有测试
-cargo test --all
+# 运行集成测试
+cargo test --test integration_tests
+
+# 生成测试覆盖率报告
+cargo tarpaulin --out Html
 ```
 
-### 构建
+---
 
+## 📊 性能优化
+
+### 编译优化
+
+生产环境编译配置（[`Cargo.toml`](Cargo.toml:101)）：
+```toml
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'
+```
+
+### 数据库优化
+
+- 使用连接池复用数据库连接
+- 为高频查询字段创建索引
+- 使用 `sqlx::query!` 宏进行编译时 SQL 验证
+- 批量操作使用事务
+
+### 缓存策略
+
+- Redis 缓存热点数据
+- 会话状态存储在 Redis
+- 使用 Redis Pub/Sub 实现实时通信
+
+---
+
+## 🐳 Docker 部署
+
+### 构建镜像
 ```bash
-# 调试构建
-cargo build
-
-# 发布构建
-cargo build --release
-
-# 构建Docker镜像
 docker build -t agent-parallel-system .
 ```
 
-## 开发路线图
-
-### 已完成功能
-- [x] 基础并行架构和任务分发
-- [x] 智能体状态管理和负载均衡
-- [x] 复杂任务依赖编排 (DAG)
-- [x] 错误恢复和状态回滚机制
-- [x] 任务检查点和自动重试
-
-### 高优先级
-- [ ] 打通前后端数据绑定
-- [x] 实现实时日志推送 (WebSocket) - 基础版本已完成
-- [ ] 完善任务创建功能
-
-### 中优先级
-- [ ] 实现身份校验和权限控制
-- [ ] 优化DAG编排性能
-- [ ] 添加工作流级别的错误恢复
-
-### 低优先级
-- [ ] 数据库集成 (PostgreSQL/Redis)
-- [ ] 完善部署工具
-- [ ] 性能优化和监控
-
-## 实时日志推送功能
-
-### 功能状态
-
-**当前版本**：基础版本已启用 ✅
-
-实时日志推送功能已集成到系统中，支持通过广播通道进行实时事件分发。
-
-### 实现情况
-
-| 功能模块 | 状态 | 说明 |
-|---------|------|------|
-| 实时日志管理器 | ✅ 已启用 | 基于Tokio广播通道的事件分发系统 |
-| 事件发布/订阅 | ✅ 可用 | 支持实时日志事件的发布和订阅 |
-| 连接统计 | ✅ 可用 | 实时连接数统计功能 |
-| SSE端点 | ⏸️ 待启用 | 代码已完成（447行），因编译器bug暂时禁用 |
-| WebSocket端点 | ⏸️ 待启用 | 代码已完成，因编译器bug暂时禁用 |
-| 高级过滤器 | ⏸️ 待启用 | 按级别、任务、智能体等多维度过滤 |
-| Redis跨实例同步 | ⏸️ 待启用 | 支持多实例部署的事件同步 |
-
-### 技术架构
-
-**当前使用**：
-- 文件：`src/core/realtime_logging_simple.rs`
-- 技术：Tokio broadcast channels
-- 功能：基础的事件发布和订阅机制
-
-**完整实现**（待启用）：
-- 文件：`src/core/realtime_logging.rs`（447行完整代码）
-- 技术：SSE + WebSocket + Redis pub/sub
-- 功能：完整的实时日志推送、过滤、跨实例同步
-
-### 为什么部分功能暂时禁用
-
-由于Rust 1.93.1编译器存在内部错误（ICE），完整的实时日志实现无法编译。我们采用了以下策略：
-
-1. **保持项目可运行**：使用简化版本确保系统正常编译和运行
-2. **保留完整代码**：447行完整实现代码已保存，随时可以启用
-3. **等待编译器更新**：当Rust编译器修复bug后，可立即切换到完整版本
-
-### 如何启用完整功能
-
-当Rust编译器更新后，只需3步即可启用完整的SSE/WebSocket功能：
-
-1. 修改 `src/core/mod.rs`：
-   ```rust
-   pub mod realtime_logging; // 使用完整版本
-   ```
-
-2. 取消注释 `src/api/routes.rs` 中的实时日志路由
-
-3. 重新编译项目：
-   ```bash
-   cargo build --release
-   ```
-
-### API端点（待启用）
-
-完整版本将提供以下API端点：
-
-- `GET /logs/sse` - SSE实时日志流
-- `GET /logs/websocket` - WebSocket实时日志
-- `GET /logs/stats` - 实时日志统计
-
-支持的过滤参数：
-- `level`: 日志级别（info, warn, error等）
-- `target`: 目标模块
-- `workspace_id`: 工作空间ID
-- `task_id`: 任务ID
-- `agent_id`: 智能体ID
-- `user_id`: 用户ID
-
-## 配置说明
-
-### 环境变量
-
-主要环境变量配置：
-
-- `DATABASE_URL`: PostgreSQL数据库连接字符串
-- `REDIS_URL`: Redis连接字符串
-- `JWT_SECRET`: JWT密钥
-- `APP_ENV`: 应用环境 (development/production)
-- `HOST`: 服务绑定地址
-- `PORT`: 服务端口
-
-### 数据库迁移
-
-系统使用SQLx进行数据库迁移：
-
+### 运行容器
 ```bash
-# 运行迁移
-cargo run -- migrate
-
-# 创建新迁移
-cargo run -- migrate create <migration_name>
+docker run -d \
+  -p 8000:8000 \
+  -e DATABASE_URL="postgres://..." \
+  -e REDIS_URL="redis://..." \
+  agent-parallel-system
 ```
 
-## 贡献指南
+### Docker Compose
+```bash
+docker-compose up -d
+```
 
-1. Fork项目
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+---
+
+## 📖 开发指南
+
+### 项目结构
+```
+agent-parallel-system/
+├── src/
+│   ├── main.rs              # 程序入口
+│   ├── lib.rs               # 库入口
+│   ├── api/                 # API 层
+│   ├── core/                # 核心功能
+│   ├── models/              # 数据模型
+│   ├── services/            # 业务服务
+│   ├── middleware/          # 中间件
+│   ├── utils/               # 工具函数
+│   └── workers/             # 后台工作器
+├── migrations/              # 数据库迁移
+├── config/                  # 配置文件
+├── scripts/                 # 部署脚本
+├── docs/                    # 文档
+└── tests/                   # 测试
+```
+
+### 添加新功能
+
+1. 在 `src/models/` 定义数据模型
+2. 在 `src/services/` 实现业务逻辑
+3. 在 `src/api/routes.rs` 添加 API 端点
+4. 在 `migrations/` 添加数据库迁移
+5. 编写单元测试和集成测试
+
+### 代码规范
+
+```bash
+# 格式化代码
+cargo fmt
+
+# 代码检查
+cargo clippy
+
+# 运行测试
+cargo test
+```
+
+---
+
+## 🔍 故障排查
+
+### SQLx 编译错误
+
+**错误**: `set DATABASE_URL to use query macros online`
+
+**解决方案**:
+```bash
+# 方案 1: 设置环境变量
+export DATABASE_URL="postgres://postgres:password@localhost:5432/agent_system"
+
+# 方案 2: 生成离线查询缓存
+cargo sqlx prepare
+```
+
+### 数据库连接失败
+
+检查：
+1. PostgreSQL 服务是否运行
+2. 数据库 URL 配置是否正确
+3. 防火墙是否允许连接
+4. 数据库用户权限是否足够
+
+### Redis 连接失败
+
+检查：
+1. Redis 服务是否运行
+2. Redis URL 配置是否正确
+3. Redis 是否需要密码认证
+
+---
+
+## 📈 监控和日志
+
+### 日志级别
+
+通过环境变量设置：
+```bash
+export RUST_LOG=info  # debug, info, warn, error
+```
+
+### 实时日志
+
+系统支持通过 SSE 或 WebSocket 实时推送日志：
+```http
+GET /api/v1/logs/stream?task_id=<uuid>
+```
+
+### 健康检查
+
+```http
+GET /health
+```
+
+返回：
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "redis": "connected",
+  "version": "0.1.0"
+}
+```
+
+---
+
+## 🤝 贡献指南
+
+我们欢迎所有形式的贡献！
+
+1. Fork 本项目
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
 3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建Pull Request
+5. 创建 Pull Request
 
-## 许可证
+### 贡献规范
 
-本项目采用MIT许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+- 遵循 Rust 代码规范
+- 添加必要的测试
+- 更新相关文档
+- 提交信息清晰明确
 
-## 联系方式
+---
 
-- 项目主页: [GitHub Repository]
-- 问题反馈: [GitHub Issues]
-- 邮箱: your.email@example.com
+## 📄 许可证
 
-## 更新日志
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
 
-### v0.1.0 (2024-01-01)
-- 初始版本发布
-- 基础多智能体架构
-- RESTful API接口
-- 容器化部署支持
+---
+
+## 🔗 相关资源
+
+- [架构设计文档](architecture.md)
+- [技术规格文档](technical-specification.md)
+- [数据库架构文档](migrations/database-schema.md)
+- [API 接口技术报告](docs/API接口技术报告.md)
+- [Rust 官方文档](https://www.rust-lang.org/)
+- [Axum 框架文档](https://docs.rs/axum/)
+- [SQLx 文档](https://docs.rs/sqlx/)
+
+---
+
+## 📞 联系方式
+
+- **项目主页**: [GitHub Repository]
+- **问题反馈**: [GitHub Issues]
+- **邮箱**: your.email@example.com
+
+---
+
+## 🎯 路线图
+
+### v0.2.0 (计划中)
+- [ ] 完整的数据库持久化
+- [ ] 高级工作流编排
+- [ ] 性能监控和指标收集
+- [ ] 分布式追踪
+
+### v0.3.0 (计划中)
+- [ ] 多租户支持
+- [ ] 智能体市场
+- [ ] 可视化工作流编辑器
+- [ ] 高级安全特性
+
+### v1.0.0 (计划中)
+- [ ] 生产级稳定性
+- [ ] 完整的文档和示例
+- [ ] 性能优化
+- [ ] 企业级功能
+
+---
+
+<div align="center">
+
+**⭐ 如果这个项目对你有帮助，请给我们一个 Star！⭐**
+
+Made with ❤️ by Agent Parallel System Team
+
+</div>
