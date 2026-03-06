@@ -17,55 +17,12 @@ use agent_parallel_system::{
     workers::task_worker,
 };
 
-/// 基于LLM的多智能体并行协作系统
-#[derive(Parser)]
-#[command(name = "agent-parallel-system")]
-#[command(about = "基于LLM的多智能体并行协作系统", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>, 
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// 启动API服务器
-    Server,
-    /// 启动后台工作器
-    Worker,
-    /// 运行数据库迁移
-    Migrate,
-    /// 显示系统信息
-    Info,
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
-
     // 初始化日志
     logging::init_logging();
-    
-    let cli = Cli::parse();
-    
-    match cli.command {
-        Some(Commands::Server) => {
-            start_server().await?;
-        }
-        Some(Commands::Worker) => {
-            start_worker().await?;
-        }
-        Some(Commands::Migrate) => {
-            run_migrations().await?;
-        }
-        Some(Commands::Info) => {
-            show_info().await?;
-        }
-        None => {
-            // 默认启动API服务器
-            start_server().await?;
-        }
-    }
-    
+    start_server().await?;
     Ok(())
 }
 

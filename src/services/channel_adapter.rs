@@ -109,7 +109,7 @@ impl ChannelAdapter for TelegramAdapter {
 
     async fn send_message(
         &self,
-        channel_user_id: &str,
+        _channel_user_id: &str,
         content: &str,
     ) -> Result<ChannelMessageResponse, AppError> {
         // 发送消息到 Telegram
@@ -122,9 +122,9 @@ impl ChannelAdapter for TelegramAdapter {
 
     async fn handle_command(
         &self,
-        channel_user_id: &str,
+        _channel_user_id: &str,
         command: &str,
-        args: Vec<String>,
+        _args: Vec<String>,
     ) -> Result<String, AppError> {
         Ok(format!("Command {} executed", command))
     }
@@ -166,7 +166,7 @@ impl ChannelAdapter for WebAdapter {
 
     async fn send_message(
         &self,
-        channel_user_id: &str,
+        _channel_user_id: &str,
         content: &str,
     ) -> Result<ChannelMessageResponse, AppError> {
         Ok(ChannelMessageResponse {
@@ -178,9 +178,9 @@ impl ChannelAdapter for WebAdapter {
 
     async fn handle_command(
         &self,
-        channel_user_id: &str,
+        _channel_user_id: &str,
         command: &str,
-        args: Vec<String>,
+        _args: Vec<String>,
     ) -> Result<String, AppError> {
         Ok(format!("Command {} executed", command))
     }

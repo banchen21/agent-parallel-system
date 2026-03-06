@@ -85,13 +85,20 @@ pub struct Agent {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub status: AgentStatus,
+    pub agent_type: String,
     pub capabilities: serde_json::Value,
-    pub endpoints: serde_json::Value,
-    pub limits: serde_json::Value,
+    pub configuration: serde_json::Value,
+    pub status: String,
+    pub workspace_id: Uuid,
+    pub created_by: Uuid,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub current_task_id: Option<Uuid>,
+    pub performance_metrics: serde_json::Value,
+    pub error_count: i32,
     pub current_load: i32,
     pub max_concurrent_tasks: i32,
-    pub last_heartbeat: Option<DateTime<Utc>>,
+    pub endpoints: serde_json::Value,
+    pub limits: serde_json::Value,
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -102,18 +109,22 @@ pub struct Agent {
 pub struct RegisterAgentRequest {
     #[validate(length(min = 1, max = 255))]
     pub name: String,
-    
-    pub description: Option<String>,
-    pub capabilities: Vec<Capability>,
     pub endpoints: AgentEndpoints,
     pub limits: AgentLimits,
-    pub metadata: Option<serde_json::Value>,
+    pub description: Option<String>,
+    pub agent_type: String,
+    pub capabilities: Vec<Capability>,
+    pub configuration: Option<serde_json::Value>,
+    pub workspace_id: Uuid,
+    pub created_by: Uuid,
+    pub max_concurrent_tasks: Option<i32>,
 }
 
 /// 智能体心跳请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentHeartbeatRequest {
     pub current_load: i32,
+    pub error_count: i32,
     pub resource_usage: ResourceUsage,
     pub active_tasks: Vec<Uuid>,
     pub metadata: Option<serde_json::Value>,
@@ -134,7 +145,7 @@ pub struct AgentResponse {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub status: AgentStatus,
+    pub status: String,
     pub capabilities: Vec<Capability>,
     pub current_load: i32,
     pub max_concurrent_tasks: i32,
@@ -198,11 +209,17 @@ impl Agent {
             }
         };
         
-        // 从 metadata 中获取成功率，默认为 1.0（100%）
-        let success_rate = self.metadata
+        // 从 performance_metrics 中获取成功率，默认为 1.0（100%）
+        let success_rate = self.performance_metrics
             .get("success_rate")
             .and_then(|v| v.as_f64())
             .unwrap_or(1.0);
+        
+        // 计算当前负载（从 performance_metrics 或默认为 0）
+        let current_load = self.performance_metrics
+            .get("current_load")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
         
         AgentResponse {
             id: self.id,
@@ -210,10 +227,10 @@ impl Agent {
             description: self.description.clone(),
             status: self.status.clone(),
             capabilities,
-            current_load: self.current_load,
+            current_load,
             max_concurrent_tasks: self.max_concurrent_tasks,
             success_rate,
-            last_heartbeat: self.last_heartbeat,
+            last_heartbeat: self.last_heartbeat_at,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -221,7 +238,11 @@ impl Agent {
     
     /// 检查智能体是否可用
     pub fn is_available(&self) -> bool {
-        self.status == AgentStatus::Online && self.current_load < self.max_concurrent_tasks
+        let current_load = self.performance_metrics
+            .get("current_load")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as i32;
+        self.status == "active" && current_load < self.max_concurrent_tasks
     }
     
     /// 检查智能体是否具有特定能力
@@ -244,7 +265,7 @@ impl Agent {
     
     /// 检查智能体是否健康（最近有心跳）
     pub fn is_healthy(&self) -> bool {
-        if let Some(last_heartbeat) = self.last_heartbeat {
+        if let Some(last_heartbeat) = self.last_heartbeat_at {
             let now = Utc::now();
             let duration = now - last_heartbeat;
             duration.num_seconds() < 300 // 5分钟内有心跳

@@ -32,20 +32,28 @@ impl DagOrchestrator {
     }
 
     /// 添加任务依赖关系
-    pub fn add_dependency(&mut self, task_id: Uuid, depends_on_task_id: Uuid) -> Result<(), AppError> {
+    pub fn add_dependency(
+        &mut self,
+        task_id: Uuid,
+        depends_on_task_id: Uuid,
+    ) -> Result<(), AppError> {
         // 检查任务是否存在
         if !self.tasks.contains_key(&task_id) {
             return Err(AppError::NotFound(format!("任务 {} 不存在", task_id)));
         }
         if !self.tasks.contains_key(&depends_on_task_id) {
-            return Err(AppError::NotFound(format!("依赖任务 {} 不存在", depends_on_task_id)));
+            return Err(AppError::NotFound(format!(
+                "依赖任务 {} 不存在",
+                depends_on_task_id
+            )));
         }
 
         // 检查是否会产生循环依赖
         if self.would_create_cycle(task_id, depends_on_task_id) {
-            return Err(AppError::ValidationError(
-                format!("添加依赖 {} -> {} 会产生循环依赖", task_id, depends_on_task_id)
-            ));
+            return Err(AppError::ValidationError(format!(
+                "添加依赖 {} -> {} 会产生循环依赖",
+                task_id, depends_on_task_id
+            )));
         }
 
         // 添加正向依赖
@@ -68,7 +76,7 @@ impl DagOrchestrator {
         // 使用BFS检查从新依赖任务是否能到达起始任务
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
-        
+
         queue.push_back(new_dependency_id);
         visited.insert(new_dependency_id);
 
@@ -108,7 +116,9 @@ impl DagOrchestrator {
 
     /// 检查任务是否就绪（所有依赖都已完成）
     pub fn is_task_ready(&self, task_id: Uuid) -> Result<bool, AppError> {
-        let _task = self.tasks.get(&task_id)
+        let _task = self
+            .tasks
+            .get(&task_id)
             .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", task_id)))?;
 
         // 如果没有依赖，任务就是就绪的
@@ -119,10 +129,12 @@ impl DagOrchestrator {
 
         // 检查所有依赖任务是否都已完成
         for &dep_task_id in deps.unwrap() {
-            let dep_task = self.tasks.get(&dep_task_id)
+            let dep_task = self
+                .tasks
+                .get(&dep_task_id)
                 .ok_or_else(|| AppError::NotFound(format!("依赖任务 {} 不存在", dep_task_id)))?;
 
-            if dep_task.status != TaskStatus::Completed {
+            if dep_task.status != "completed" {
                 return Ok(false);
             }
         }
@@ -151,7 +163,9 @@ impl DagOrchestrator {
 
         // 计算每个任务的入度（依赖数量）
         for (&task_id, _) in &self.tasks {
-            let degree = self.dependencies.get(&task_id)
+            let degree = self
+                .dependencies
+                .get(&task_id)
                 .map(|deps| deps.len())
                 .unwrap_or(0);
             in_degree.insert(task_id, degree);
@@ -181,7 +195,7 @@ impl DagOrchestrator {
         // 检查是否有循环依赖
         if order.len() != self.tasks.len() {
             return Err(AppError::ValidationError(
-                "DAG中存在循环依赖，无法确定执行顺序".to_string()
+                "DAG中存在循环依赖，无法确定执行顺序".to_string(),
             ));
         }
 
@@ -192,7 +206,7 @@ impl DagOrchestrator {
     pub fn get_critical_path(&self) -> Result<Vec<Uuid>, AppError> {
         // 简单的关键路径算法（假设所有任务执行时间相同）
         let execution_order = self.get_execution_order()?;
-        
+
         if execution_order.is_empty() {
             return Ok(Vec::new());
         }
@@ -201,14 +215,14 @@ impl DagOrchestrator {
         let mut earliest_start = HashMap::new();
         for &task_id in &execution_order {
             let mut max_earliest = 0;
-            
+
             if let Some(deps) = self.dependencies.get(&task_id) {
                 for &dep_id in deps {
                     let dep_earliest = *earliest_start.get(&dep_id).unwrap_or(&0);
                     max_earliest = max_earliest.max(dep_earliest + 1); // 假设每个任务执行时间为1
                 }
             }
-            
+
             earliest_start.insert(task_id, max_earliest);
         }
 
@@ -228,11 +242,17 @@ impl DagOrchestrator {
     }
 
     /// 更新任务状态
-    pub fn update_task_status(&mut self, task_id: Uuid, status: TaskStatus) -> Result<(), AppError> {
-        let task = self.tasks.get_mut(&task_id)
+    pub fn update_task_status(
+        &mut self,
+        task_id: Uuid,
+        status: TaskStatus,
+    ) -> Result<(), AppError> {
+        let task = self
+            .tasks
+            .get_mut(&task_id)
             .ok_or_else(|| AppError::NotFound(format!("任务 {} 不存在", task_id)))?;
 
-        task.status = status;
+        task.status = status.to_string();
         Ok(())
     }
 
@@ -264,41 +284,39 @@ mod tests {
             id,
             title: "Test Task".to_string(),
             description: Some("Test Description".to_string()),
-            status,
-            priority: crate::models::task::TaskPriority::Medium,
+            status: status.to_string(),
+            priority: crate::models::task::TaskPriority::Medium.to_string(),
             parent_task_id: None,
             workspace_id: Uuid::new_v4(),
             assigned_agent_id: None,
             created_by: Uuid::new_v4(),
             requirements: serde_json::json!({}),
-            context: serde_json::json!({}),
             result: None,
             progress: 0,
-            current_step: None,
-            estimated_completion: None,
             started_at: None,
             completed_at: None,
-            execution_time: None,
-            retry_count: 0,
+            retry_count: Some(0),
             metadata: serde_json::json!({}),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            execution_context: serde_json::json!({}),
+            tags: serde_json::json!([]),
+            created_at: Some(Utc::now()),
+            updated_at: Some(Utc::now()),
         }
     }
 
     #[test]
     fn test_add_task_and_dependency() {
         let mut dag = DagOrchestrator::new();
-        
+
         let task1_id = Uuid::new_v4();
         let task2_id = Uuid::new_v4();
-        
+
         let task1 = create_test_task(task1_id, TaskStatus::Pending);
         let task2 = create_test_task(task2_id, TaskStatus::Pending);
-        
+
         dag.add_task(task1);
         dag.add_task(task2);
-        
+
         assert!(dag.add_dependency(task2_id, task1_id).is_ok());
         assert!(dag.is_task_ready(task1_id).unwrap());
         assert!(!dag.is_task_ready(task2_id).unwrap());
@@ -307,23 +325,23 @@ mod tests {
     #[test]
     fn test_cycle_detection() {
         let mut dag = DagOrchestrator::new();
-        
+
         let task1_id = Uuid::new_v4();
         let task2_id = Uuid::new_v4();
         let task3_id = Uuid::new_v4();
-        
+
         let task1 = create_test_task(task1_id, TaskStatus::Pending);
         let task2 = create_test_task(task2_id, TaskStatus::Pending);
         let task3 = create_test_task(task3_id, TaskStatus::Pending);
-        
+
         dag.add_task(task1);
         dag.add_task(task2);
         dag.add_task(task3);
-        
+
         // 添加依赖：2 -> 1, 3 -> 2
         assert!(dag.add_dependency(task2_id, task1_id).is_ok());
         assert!(dag.add_dependency(task3_id, task2_id).is_ok());
-        
+
         // 尝试添加循环依赖：1 -> 3
         assert!(dag.add_dependency(task1_id, task3_id).is_err());
     }
@@ -331,23 +349,23 @@ mod tests {
     #[test]
     fn test_topological_sort() {
         let mut dag = DagOrchestrator::new();
-        
+
         let task1_id = Uuid::new_v4();
         let task2_id = Uuid::new_v4();
         let task3_id = Uuid::new_v4();
-        
+
         let task1 = create_test_task(task1_id, TaskStatus::Pending);
         let task2 = create_test_task(task2_id, TaskStatus::Pending);
         let task3 = create_test_task(task3_id, TaskStatus::Pending);
-        
+
         dag.add_task(task1);
         dag.add_task(task2);
         dag.add_task(task3);
-        
+
         // 添加依赖：2 -> 1, 3 -> 2
         assert!(dag.add_dependency(task2_id, task1_id).is_ok());
         assert!(dag.add_dependency(task3_id, task2_id).is_ok());
-        
+
         let order = dag.get_execution_order().unwrap();
         assert_eq!(order.len(), 3);
         assert_eq!(order[0], task1_id);
@@ -358,26 +376,27 @@ mod tests {
     #[test]
     fn test_ready_tasks() {
         let mut dag = DagOrchestrator::new();
-        
+
         let task1_id = Uuid::new_v4();
         let task2_id = Uuid::new_v4();
-        
+
         let task1 = create_test_task(task1_id, TaskStatus::Pending);
         let task2 = create_test_task(task2_id, TaskStatus::Pending);
-        
+
         dag.add_task(task1);
         dag.add_task(task2);
-        
+
         // 添加依赖：2 -> 1
         assert!(dag.add_dependency(task2_id, task1_id).is_ok());
-        
+
         let ready_tasks = dag.get_ready_tasks();
         assert_eq!(ready_tasks.len(), 1);
         assert_eq!(ready_tasks[0], task1_id);
-        
+
         // 完成任务1
-        dag.update_task_status(task1_id, TaskStatus::Completed).unwrap();
-        
+        dag.update_task_status(task1_id, TaskStatus::Completed)
+            .unwrap();
+
         let ready_tasks = dag.get_ready_tasks();
         assert_eq!(ready_tasks.len(), 1);
         assert_eq!(ready_tasks[0], task2_id);

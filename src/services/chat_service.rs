@@ -1,10 +1,9 @@
-use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
     core::errors::AppError,
-    models::chat::{ChatSession, ChatMessage, CreateChatSessionRequest, LLMConfig},
+    models::chat::{ChatMessage, ChatSession, CreateChatSessionRequest, LLMConfig},
 };
 
 /// 聊天服务
@@ -24,28 +23,27 @@ impl ChatService {
         request: CreateChatSessionRequest,
     ) -> Result<ChatSession, AppError> {
         let model = request.model.unwrap_or_else(|| "gpt-3.5-turbo".to_string());
-        let temperature = request.temperature.unwrap_or(0.7);
-        let max_tokens = request.max_tokens.unwrap_or(2000);
-        let context_window = request.context_window.unwrap_or(10);
+        let temperature: f64 = request.temperature.unwrap_or(0.7).into();
+        let max_tokens: i32 = request.max_tokens.unwrap_or(2000);
+        let context_window: i32 = request.context_window.unwrap_or(10);
 
         let session = sqlx::query_as!(
             ChatSession,
             r#"
             INSERT INTO chat_sessions (
                 channel_user_id, title, model, system_prompt,
-                temperature, max_tokens, context_window, metadata
+                temperature, max_tokens, context_window
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             "#,
             request.channel_user_id,
             request.title,
             model,
             request.system_prompt,
-            temperature,
+            temperature as f64,
             max_tokens,
-            context_window,
-            serde_json::json!({})
+            context_window
         )
         .fetch_one(&self.db_pool)
         .await?;
@@ -98,7 +96,7 @@ impl ChatService {
             Some("Global Chat Session"),
             "gpt-3.5-turbo",
             None,
-            0.7,
+            0.7_f64,
             2000,
             10,
             serde_json::json!({"type": "global", "memory_backed": true})

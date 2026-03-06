@@ -163,9 +163,9 @@ impl OrchestratorService {
             r#"
             SELECT * FROM agents 
             WHERE status = 'online' 
-            AND current_load < max_concurrent_tasks
-            AND last_heartbeat > NOW() - INTERVAL '5 minutes'
-            ORDER BY current_load ASC, last_heartbeat DESC
+            AND error_count < max_concurrent_tasks
+            AND last_heartbeat_at > NOW() - INTERVAL '5 minutes'
+            ORDER BY error_count ASC, last_heartbeat_at DESC
             "#
         )
         .fetch_all(&self.db_pool)
@@ -206,7 +206,7 @@ impl OrchestratorService {
         
         agents
             .iter()
-            .min_by_key(|agent| agent.current_load)
+            .min_by_key(|agent| agent.error_count)
             .ok_or_else(|| AppError::InternalServerError)
             .map(|agent| *agent)
     }
@@ -236,7 +236,7 @@ impl OrchestratorService {
         
         // 更新智能体负载
         sqlx::query!(
-            "UPDATE agents SET current_load = current_load + 1, updated_at = NOW() WHERE id = $1",
+            "UPDATE agents SET error_count = error_count + 1, updated_at = NOW() WHERE id = $1",
             agent.id
         )
         .execute(&self.db_pool)
@@ -346,12 +346,11 @@ impl OrchestratorService {
         
         sqlx::query!(
             r#"
-            UPDATE tasks 
-            SET 
+            UPDATE tasks
+            SET
                 status = $1,
                 result = $2,
                 completed_at = NOW(),
-                execution_time = EXTRACT(EPOCH FROM (NOW() - started_at)),
                 updated_at = NOW()
             WHERE id = $3
             "#,
@@ -365,7 +364,7 @@ impl OrchestratorService {
         // 如果任务有分配的智能体，释放其负载
         if let Some(agent_id) = task.assigned_agent_id {
             sqlx::query!(
-                "UPDATE agents SET current_load = GREATEST(0, current_load - 1), updated_at = NOW() WHERE id = $1",
+                "UPDATE agents SET error_count = GREATEST(0, error_count - 1), updated_at = NOW() WHERE id = $1",
                 agent_id
             )
             .execute(&self.db_pool)
@@ -474,14 +473,15 @@ impl OrchestratorService {
     pub async fn get_orchestrator_stats(&self) -> Result<serde_json::Value, AppError> {
         let stats = sqlx::query!(
             r#"
-            SELECT 
+            SELECT
                 COUNT(*) as total_tasks,
                 COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_tasks,
                 COUNT(CASE WHEN status = 'in_progress' THEN 1 END) as in_progress_tasks,
                 COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_tasks,
                 COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_tasks,
-                AVG(execution_time)::float8 as avg_execution_time
+                AVG(EXTRACT(EPOCH FROM (completed_at - started_at)))::float8 as avg_duration
             FROM tasks
+            WHERE completed_at IS NOT NULL AND started_at IS NOT NULL
             "#
         )
         .fetch_one(&self.db_pool)
@@ -493,7 +493,7 @@ impl OrchestratorService {
             "in_progress_tasks": stats.in_progress_tasks.unwrap_or(0),
             "completed_tasks": stats.completed_tasks.unwrap_or(0),
             "failed_tasks": stats.failed_tasks.unwrap_or(0),
-            "average_execution_time": stats.avg_execution_time.unwrap_or(0.0),
+            "average_duration_seconds": stats.avg_duration.unwrap_or(0.0),
         });
         
         Ok(stats_json)

@@ -30,6 +30,14 @@ pub enum TaskPriority {
     Urgent,
 }
 
+/// 任务依赖类型
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyType {
+    Blocking,
+    NonBlocking,
+}
+
 impl fmt::Display for TaskStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
@@ -95,25 +103,23 @@ pub struct Task {
     pub id: Uuid,
     pub title: String,
     pub description: Option<String>,
-    pub status: TaskStatus,
-    pub priority: TaskPriority,
+    pub status: String,
+    pub priority: String,
     pub parent_task_id: Option<Uuid>,
     pub workspace_id: Uuid,
     pub assigned_agent_id: Option<Uuid>,
     pub created_by: Uuid,
-    pub requirements: serde_json::Value,
-    pub context: serde_json::Value,
-    pub result: Option<serde_json::Value>,
     pub progress: i32,
-    pub current_step: Option<String>,
-    pub estimated_completion: Option<DateTime<Utc>>,
+    pub requirements: serde_json::Value,
+    pub result: Option<serde_json::Value>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    pub execution_time: Option<i32>,
-    pub retry_count: i32,
+    pub retry_count: Option<i32>,
     pub metadata: serde_json::Value,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub execution_context: serde_json::Value,
+    pub tags: serde_json::Value,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// 任务创建请求
@@ -121,12 +127,11 @@ pub struct Task {
 pub struct CreateTaskRequest {
     #[validate(length(min = 1, max = 500))]
     pub title: String,
-    
+    pub context: Option<serde_json::Value>,
     pub description: Option<String>,
     pub priority: TaskPriority,
     pub workspace_id: Uuid,
     pub requirements: serde_json::Value,
-    pub context: serde_json::Value,
     pub metadata: Option<serde_json::Value>,
 }
 
@@ -137,8 +142,6 @@ pub struct UpdateTaskRequest {
     pub description: Option<String>,
     pub status: Option<TaskStatus>,
     pub priority: Option<TaskPriority>,
-    pub progress: Option<i32>,
-    pub current_step: Option<String>,
     pub result: Option<serde_json::Value>,
     pub metadata: Option<serde_json::Value>,
 }
@@ -147,8 +150,6 @@ pub struct UpdateTaskRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateTaskStatusRequest {
     pub status: TaskStatus,
-    pub progress: Option<i32>,
-    pub current_step: Option<String>,
     pub result: Option<serde_json::Value>,
     pub metadata: Option<serde_json::Value>,
 }
@@ -159,21 +160,15 @@ pub struct TaskResponse {
     pub id: Uuid,
     pub title: String,
     pub description: Option<String>,
-    pub status: TaskStatus,
-    pub priority: TaskPriority,
-    pub parent_task_id: Option<Uuid>,
+    pub status: String,
+    pub priority: String,
     pub workspace_id: Uuid,
     pub assigned_agent_id: Option<Uuid>,
     pub created_by: Uuid,
     pub requirements: serde_json::Value,
-    pub context: serde_json::Value,
     pub result: Option<serde_json::Value>,
-    pub progress: i32,
-    pub current_step: Option<String>,
-    pub estimated_completion: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    pub execution_time: Option<i32>,
     pub retry_count: i32,
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
@@ -181,56 +176,27 @@ pub struct TaskResponse {
     pub subtasks: Vec<TaskResponse>,
 }
 
-/// 任务依赖模型
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct TaskDependency {
-    pub id: Uuid,
-    pub task_id: Uuid,
-    pub depends_on_task_id: Uuid,
-    pub dependency_type: DependencyType,
-    pub created_at: DateTime<Utc>,
-}
-
-/// 依赖类型
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "text", rename_all = "lowercase")]
-pub enum DependencyType {
-    Blocking,
-    NonBlocking,
-}
-
-/// 任务分解策略
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TaskDecompositionStrategy {
-    Hierarchical,
-    Sequential,
-    Parallel,
-}
-
 /// 任务分解请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskDecompositionRequest {
-    pub strategy: TaskDecompositionStrategy,
-    pub max_depth: Option<i32>,
-    pub constraints: Option<serde_json::Value>,
-}
-
-/// 任务分解结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskDecompositionResult {
-    pub parent_task_id: Uuid,
+    pub task_id: Uuid,
     pub subtasks: Vec<SubtaskDefinition>,
 }
 
 /// 子任务定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubtaskDefinition {
-    pub id: Uuid,
     pub title: String,
-    pub description: String,
-    pub dependencies: Vec<Uuid>,
-    pub estimated_duration: i32,
-    pub required_capabilities: Vec<String>,
+    pub description: Option<String>,
+    pub priority: TaskPriority,
+    pub requirements: serde_json::Value,
+}
+
+/// 任务分解结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDecompositionResult {
+    pub parent_task_id: Uuid,
+    pub subtasks: Vec<Task>,
 }
 
 impl Task {
@@ -242,46 +208,34 @@ impl Task {
             description: self.description.clone(),
             status: self.status.clone(),
             priority: self.priority.clone(),
-            parent_task_id: self.parent_task_id,
             workspace_id: self.workspace_id,
             assigned_agent_id: self.assigned_agent_id,
             created_by: self.created_by,
             requirements: self.requirements.clone(),
-            context: self.context.clone(),
             result: self.result.clone(),
-            progress: self.progress,
-            current_step: self.current_step.clone(),
-            estimated_completion: self.estimated_completion,
             started_at: self.started_at,
             completed_at: self.completed_at,
-            execution_time: self.execution_time,
-            retry_count: self.retry_count,
+            retry_count: self.retry_count.unwrap_or(0),
             metadata: self.metadata.clone(),
-            created_at: self.created_at,
-            updated_at: self.updated_at,
+            created_at: self.created_at.unwrap_or_else(|| chrono::Utc::now()),
+            updated_at: self.updated_at.unwrap_or_else(|| chrono::Utc::now()),
             subtasks,
         }
     }
     
-    /// 验证任务数据
-    pub fn validate(&self) -> Result<(), crate::core::errors::AppError> {
-        InputValidator::validate_task_title(&self.title)?;
-        Ok(())
-    }
-    
     /// 检查任务是否可以开始
     pub fn can_start(&self) -> bool {
-        self.status == TaskStatus::Pending
+        self.status == "pending"
     }
     
     /// 检查任务是否可以完成
     pub fn can_complete(&self) -> bool {
-        matches!(self.status, TaskStatus::InProgress | TaskStatus::Pending)
+        self.status == "pending" || self.status == "in_progress"
     }
     
     /// 检查任务是否可以取消
     pub fn can_cancel(&self) -> bool {
-        matches!(self.status, TaskStatus::Pending | TaskStatus::InProgress)
+        self.status == "pending" || self.status == "in_progress"
     }
     
     /// 计算任务执行时间

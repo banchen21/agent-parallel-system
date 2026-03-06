@@ -83,7 +83,7 @@ impl LLMClient {
         let response = req
             .send()
             .await
-            .map_err(|e| AppError::InternalServerError)?;
+            .map_err(|_e| AppError::InternalServerError)?;
 
         if !response.status().is_success() {
             return Err(AppError::InternalServerError);
@@ -92,7 +92,7 @@ impl LLMClient {
         let completion = response
             .json::<ChatCompletionResponse>()
             .await
-            .map_err(|e| AppError::InternalServerError)?;
+            .map_err(|_e| AppError::InternalServerError)?;
 
         Ok(completion)
     }

@@ -54,7 +54,7 @@ impl MessageService {
             message.id,
             message.agent_id,
             message.message_type,
-            message.content,
+            serde_json::to_value(&message.content).unwrap_or(serde_json::Value::Null),
             message.metadata,
             message.created_at,
             message.read
@@ -107,7 +107,7 @@ impl MessageService {
             message.id,
             message.task_id,
             message.message_type,
-            message.content,
+            serde_json::to_value(&message.content).unwrap_or(serde_json::Value::Null),
             message.metadata,
             message.created_at
         )
@@ -145,7 +145,7 @@ impl MessageService {
             message.id,
             message.user_id,
             message.message_type,
-            message.content,
+            serde_json::to_value(&message.content).unwrap_or(serde_json::Value::Null),
             message.metadata,
             message.created_at,
             message.read

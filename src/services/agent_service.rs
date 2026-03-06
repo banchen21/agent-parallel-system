@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use log::debug;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -45,34 +44,28 @@ impl AgentService {
         // 序列化配置
         let capabilities = serde_json::to_value(request.capabilities)
             .context("序列化智能体能力失败")?;
-        let endpoints = serde_json::to_value(request.endpoints)
-            .context("序列化智能体端点失败")?;
-        let limits = serde_json::to_value(request.limits)
-            .context("序列化智能体限制失败")?;
-        let max_concurrent_tasks = limits
-            .get("max_concurrent_tasks")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(1) as i32;
+        let configuration = request.configuration.unwrap_or(serde_json::json!({}));
+        let max_concurrent_tasks = request.max_concurrent_tasks.unwrap_or(1);
         
-        let agent = sqlx::query_as!(
-            Agent,
+        let agent = sqlx::query_as::<_, Agent>(
             r#"
             INSERT INTO agents (
-                name, description, status, capabilities, endpoints,
-                limits, max_concurrent_tasks, metadata, last_heartbeat
+                name, description, agent_type, capabilities, configuration,
+                status, workspace_id, created_by, max_concurrent_tasks
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING *
-            "#,
-            request.name,
-            request.description,
-            AgentStatus::Online as AgentStatus,
-            capabilities,
-            endpoints,
-            limits,
-            max_concurrent_tasks,
-            request.metadata.unwrap_or(serde_json::Value::Null)
+            "#
         )
+        .bind(&request.name)
+        .bind(&request.description)
+        .bind(&request.agent_type)
+        .bind(&capabilities)
+        .bind(&configuration)
+        .bind("active")
+        .bind(&request.workspace_id)
+        .bind(&request.created_by)
+        .bind(max_concurrent_tasks)
         .fetch_one(&self.db_pool)
         .await
         .context("注册智能体失败")?;
@@ -98,22 +91,19 @@ impl AgentService {
         request.validate()?;
         
         // 更新智能体状态
-        let agent = sqlx::query_as!(
-            Agent,
+        let agent = sqlx::query_as::<_, Agent>(
             r#"
-            UPDATE agents 
-            SET 
-                current_load = $1,
-                last_heartbeat = NOW(),
-                metadata = COALESCE($2, metadata),
+            UPDATE agents
+            SET
+                error_count = $1,
+                last_heartbeat_at = NOW(),
                 updated_at = NOW()
-            WHERE id = $3
+            WHERE id = $2
             RETURNING *
-            "#,
-            request.current_load,
-            request.metadata,
-            agent_id
+            "#
         )
+        .bind(request.error_count)
+        .bind(agent_id)
         .fetch_optional(&self.db_pool)
         .await?;
         
@@ -162,17 +152,8 @@ impl AgentService {
         &self,
     ) -> Result<Vec<Agent>, AppError> {
         
-        let agents = sqlx::query_as!(
-            Agent,
-            r#"
-            SELECT
-                id, name, description, status as "status: AgentStatus",
-                capabilities, endpoints, limits, current_load,
-                max_concurrent_tasks, last_heartbeat, metadata,
-                created_at, updated_at
-            FROM agents
-            ORDER BY created_at DESC
-            "#
+        let agents = sqlx::query_as::<_, Agent>(
+            "SELECT * FROM agents ORDER BY created_at DESC"
         )
         .fetch_all(&self.db_pool)
         .await?;
@@ -189,18 +170,17 @@ impl AgentService {
         // 选择负载最低的智能体
         let best_agent = available_agents
             .into_iter()
-            .min_by_key(|agent| agent.current_load);
+            .min_by_key(|agent| agent.error_count);
         
         Ok(best_agent)
     }
     
     /// 根据ID获取智能体
     pub async fn get_agent_by_id(&self, agent_id: Uuid) -> Result<Option<Agent>, AppError> {
-        let agent = sqlx::query_as!(
-            Agent,
-            "SELECT * FROM agents WHERE id = $1",
-            agent_id
+        let agent = sqlx::query_as::<_, Agent>(
+            "SELECT * FROM agents WHERE id = $1"
         )
+        .bind(agent_id)
         .fetch_optional(&self.db_pool)
         .await?;
         
@@ -243,7 +223,7 @@ impl AgentService {
         
         // 更新智能体负载
         sqlx::query!(
-            "UPDATE agents SET current_load = current_load + 1, updated_at = NOW() WHERE id = $1",
+            "UPDATE agents SET error_count = error_count + 1, updated_at = NOW() WHERE id = $1",
             request.agent_id
         )
         .execute(&self.db_pool)
@@ -291,7 +271,7 @@ impl AgentService {
         
         // 释放智能体负载
         sqlx::query!(
-            "UPDATE agents SET current_load = GREATEST(0, current_load - 1), updated_at = NOW() WHERE id = $1",
+            "UPDATE agents SET error_count = GREATEST(0 - 1), updated_at = NOW() WHERE id = $1",
             agent_id
         )
         .execute(&self.db_pool)
@@ -314,17 +294,16 @@ impl AgentService {
         agent_id: Uuid,
         status: AgentStatus,
     ) -> Result<Agent, AppError> {
-        let agent = sqlx::query_as!(
-            Agent,
+        let agent = sqlx::query_as::<_, Agent>(
             r#"
-            UPDATE agents 
+            UPDATE agents
             SET status = $1, updated_at = NOW()
             WHERE id = $2
             RETURNING *
-            "#,
-            status.to_string(),
-            agent_id
+            "#
         )
+        .bind(status.to_string())
+        .bind(agent_id)
         .fetch_optional(&self.db_pool)
         .await?;
         
@@ -351,8 +330,8 @@ impl AgentService {
                 COUNT(CASE WHEN status = 'busy' THEN 1 END) as busy_agents,
                 COUNT(CASE WHEN status = 'idle' THEN 1 END) as idle_agents,
                 COUNT(CASE WHEN status = 'offline' THEN 1 END) as offline_agents,
-                AVG(current_load)::float8 as avg_load,
-                SUM(current_load) as total_load
+                AVG(error_count)::float8 as avg_load,
+                SUM(error_count) as total_load
             FROM agents
             "#
         )
@@ -397,7 +376,7 @@ impl AgentService {
             UPDATE agents
             SET status = 'offline', updated_at = NOW()
             WHERE status = 'online'
-            AND last_heartbeat < NOW() - INTERVAL '10 minutes'
+            AND last_heartbeat_at < NOW() - INTERVAL '10 minutes'
             "#
         )
         .execute(&self.db_pool)

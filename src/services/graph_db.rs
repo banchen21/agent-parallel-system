@@ -102,8 +102,8 @@ impl GraphDBClient {
     /// 查询相关节点
     pub async fn query_related_nodes(
         &self,
-        node_id: &str,
-        depth: i32,
+        _node_id: &str,
+        _depth: i32,
     ) -> Result<Vec<GraphNode>, AppError> {
         // 这里实现图数据库查询逻辑
         Ok(Vec::new())
@@ -125,7 +125,7 @@ impl GraphDBClient {
     }
 
     /// 删除节点
-    pub async fn delete_node(&self, node_id: &str) -> Result<(), AppError> {
+    pub async fn delete_node(&self, _node_id: &str) -> Result<(), AppError> {
         Ok(())
     }
 }

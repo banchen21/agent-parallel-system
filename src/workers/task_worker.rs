@@ -183,7 +183,7 @@ impl TaskWorker {
             // 释放智能体负载
             if let Some(agent_id) = task.assigned_agent_id {
                 sqlx::query!(
-                    "UPDATE agents SET current_load = GREATEST(0, current_load - 1), updated_at = NOW() WHERE id = $1",
+                    "UPDATE agents SET error_count = GREATEST(0, error_count - 1), updated_at = NOW() WHERE id = $1",
                     agent_id
                 )
                 .execute(&self.db_pool)

@@ -9,16 +9,15 @@ use crate::AppState;
 pub fn swagger_routes() -> Router<AppState> {
     Router::new()
         .route("/swagger-ui", get(swagger_ui))
-        .route("/swagger-ui/", get(swagger_ui))
         .route("/openapi.json", get(openapi_spec))
 }
 
 /// Swagger UI HTML
 async fn swagger_ui() -> Html<&'static str> {
-    Html(include_str!("swagger-ui.html"))
+    Html(include_str!("../../docs/swagger-ui.html"))
 }
 
-/// OpenAPI 规范 JSON
+/// OpenAPI 规范 JSON 
 async fn openapi_spec() -> axum::Json<serde_json::Value> {
     let spec = serde_json::json!({
         "openapi": "3.0.0",

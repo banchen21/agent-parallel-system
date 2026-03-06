@@ -17,7 +17,13 @@ rust-version = "1.70"
 # Web框架
 axum = { version = "0.7", features = ["macros", "ws"] }
 axum-extra = { version = "0.9", features = ["cookie"] }
-tokio = { version = "1.37", features = ["full", "rt-multi-thread", "time", "sync", "macros"] }
+tokio = { version = "1.37", features = [
+    "full",
+    "rt-multi-thread",
+    "time",
+    "sync",
+    "macros",
+] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "compression-br"] }
@@ -29,7 +35,8 @@ sqlx = { version = "0.7", features = [
     "uuid",
     "chrono",
     "json",
-] }
+    "macros"
+], default-features = false }
 postgres-types = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.7", features = ["v4", "serde"] }
@@ -112,10 +119,3 @@ redis = ["dep:bb8-redis"]
 jwt = ["dep:jsonwebtoken"]
 openai = ["dep:openai"]
 monitoring = ["dep:opentelemetry", "dep:opentelemetry-otlp"]
-
-# 工作区（可选）
-# [workspace]
-# members = [
-#     "crates/*",
-# ]
-# resolver = "2"

@@ -140,8 +140,8 @@ impl ErrorRecoveryManager {
         let checkpoint = TaskCheckpoint {
             task_id: task.id,
             timestamp: Utc::now(),
-            status: task.status.clone(),
-            progress: task.progress,
+            status: task.status.clone().into(),
+            progress: task.progress.clone(),
             result: task.result.clone(),
             metadata: task.metadata.clone(),
         };

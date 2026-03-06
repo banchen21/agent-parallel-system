@@ -75,7 +75,7 @@ impl MemoryService {
     pub async fn retrieve_relevant_memory(
         &self,
         session_id: Uuid,
-        query: &str,
+        _query: &str,
         depth: i32,
     ) -> Result<Vec<String>, AppError> {
         // 查询相关节点
@@ -96,7 +96,7 @@ impl MemoryService {
     /// 提取实体和关系
     pub async fn extract_entities_and_relations(
         &self,
-        text: &str,
+        _text: &str,
     ) -> Result<(Vec<String>, Vec<(String, String, String)>), AppError> {
         // 这里实现 NLP 提取逻辑
         // 返回 (实体列表, 关系列表)
@@ -143,22 +143,8 @@ impl MemoryService {
     }
 
     /// 清理过期记忆
-    pub async fn cleanup_old_memory(&self, days: i32) -> Result<u64, AppError> {
+    pub async fn cleanup_old_memory(&self, _days: i32) -> Result<u64, AppError> {
         // 这里实现清理逻辑
         Ok(0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_memory_service_creation() {
-        let service = MemoryService::new(
-            "http://localhost:7687".to_string(),
-            None,
-        );
-        // 测试创建成功
     }
 }

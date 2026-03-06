@@ -7,7 +7,7 @@ use crate::{
     models::chat::MessageRole,
     services::{
         ChatService, ChannelService, LLMClient,
-        channel_adapter::{ChannelMessage, ChannelAdapterFactory},
+        channel_adapter::ChannelMessage,
         llm_client::ChatCompletionMessage,
     },
 };

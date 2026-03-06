@@ -1,3 +1,29 @@
 {
-	"mcpServers": {}
+	"mcpServers": {
+		"Apifox 开放 API - API 文档": {
+			"command": "cmd",
+			"args": [
+				"/c",
+				"npx",
+				"-y",
+				"apifox-mcp-server@latest",
+				"--site-id=4478210"
+			]
+		},
+		"postgres": {
+			"type": "stdio",
+			"command": "npx",
+			"args": [
+				"-y",
+				"mcp-postgres-server"
+			],
+			"env": {
+				"PG_HOST": "127.0.0.1",
+				"PG_PORT": "5432",
+				"PG_USER": "postgres",
+				"PG_PASSWORD": "password",
+				"PG_DATABASE": "agent_system"
+			}
+		}
+	}
 }

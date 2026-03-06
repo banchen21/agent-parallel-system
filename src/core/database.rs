@@ -9,9 +9,9 @@ use super::config;
 /// 创建PostgreSQL数据库连接池
 pub async fn create_db_pool() -> Result<PgPool> {
     let database_url = config::CONFIG.database_url();
-    
+
     info!("Connecting to database at: {}", database_url);
-    
+
     let pool = PgPoolOptions::new()
         .max_connections(config::CONFIG.database.max_connections)
         .min_connections(config::CONFIG.database.min_connections)
@@ -24,13 +24,6 @@ pub async fn create_db_pool() -> Result<PgPool> {
         .connect(database_url)
         .await
         .context("Failed to create database connection pool")?;
-    
-    // 测试连接
-    sqlx::query("SELECT 1")
-        .execute(&pool)
-        .await
-        .context("Failed to test database connection")?;
-    
     info!("Database connection pool created successfully");
     Ok(pool)
 }
@@ -38,26 +31,18 @@ pub async fn create_db_pool() -> Result<PgPool> {
 /// 创建Redis连接池
 pub async fn create_redis_pool() -> Result<Pool<RedisConnectionManager>> {
     let redis_url = config::CONFIG.redis_url();
-    
+
     info!("Connecting to Redis at: {}", redis_url);
-    
+
     let manager = RedisConnectionManager::new(redis_url)
         .context("Failed to create Redis connection manager")?;
-    
+
     let pool = Pool::builder()
         .max_size(config::CONFIG.redis.pool_size)
         .build(manager)
         .await
         .context("Failed to create Redis connection pool")?;
-    
-    // 测试连接
-    let mut conn = pool.get().await?;
-    redis::cmd("PING")
-        .query_async::<String>(&mut *conn)
-        .await
-        .context("Failed to test Redis connection")?;
-    drop(conn);
-    
+
     info!("Redis connection pool created successfully");
     Ok(pool)
 }
@@ -81,12 +66,12 @@ pub async fn get_redis_conn(
 /// 数据库迁移
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     info!("Running database migrations...");
-    
+
     sqlx::migrate!("./migrations")
         .run(pool)
         .await
         .context("Failed to run database migrations")?;
-    
+
     info!("Database migrations completed successfully");
     Ok(())
 }
