@@ -593,9 +593,9 @@ GET /health
 
 ## 📞 联系方式
 
-- **项目主页**: [GitHub Repository]
-- **问题反馈**: [GitHub Issues]
-- **邮箱**: your.email@example.com
+- **项目主页**: [\[Agent Parallel System\]](https://github.com/banchen21/agent-parallel-system)
+- **问题反馈**: [\[GitHub Issues\]](https://github.com/banchen21/agent-parallel-system/issues)
+- **邮箱**: banchen19@outlook.com
 
 ---
 

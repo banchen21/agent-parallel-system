@@ -1,147 +1,264 @@
-use std::{net::SocketAddr, sync::Arc};
+use actix_web::{App, HttpResponse, HttpServer, web};
+use dotenv::dotenv;
+use tracing::{debug, info, error};
+use async_openai::{
+    types::chat::{
+        CreateChatCompletionRequestArgs,
+        ChatCompletionRequestSystemMessage,
+    },
+    Client,
+    config::OpenAIConfig,
+};
+use std::env;
+use std::sync::Arc;
+use anyhow::Result;
 
-use axum::{
-    http::{HeaderValue, Method},
-    Router,
-};
-use clap::{Parser, Subcommand};
-use tower_http::{
-    cors::CorsLayer,
-    trace::TraceLayer,
-};
-use tracing::{info};
-
-use agent_parallel_system::{
-    api::{routes, swagger_routes},
-    core::{config, database, logging, realtime_logging},
-    workers::task_worker,
-};
+// 引入通道层模块
+mod channel;
+use channel::{ChannelManager, ChannelBuilder, ReceiverFactory, configure_api_routes, MessagePersistence};
+use channel::handler::{ChatHandler, TaskHandler, SystemHandler};
+use channel::{Message, MessageSource, MessageType, MessagePriority};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenv::dotenv().ok();
-    // 初始化日志
-    logging::init_logging();
-    start_server().await?;
-    Ok(())
-}
+async fn main() -> Result<()> {
+    dotenv().ok();
 
-/// 启动API服务器
-async fn start_server() -> anyhow::Result<()> {
-    info!(
-        "Starting {} v{} in {} environment",
-        config::CONFIG.app_name,
-        env!("CARGO_PKG_VERSION"),
-        config::CONFIG.environment
+    // 从环境变量读取日志级别，默认为 info
+    let log_level = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
+
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    info!("正在启动 Agent Parallel System...");
+
+    // 初始化数据库连接
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://postgres:password@localhost/agent_parallel_system".to_string());
+    
+    let pool = sqlx::PgPool::connect(&database_url).await?;
+    info!("数据库连接成功");
+
+    // 初始化数据库表结构
+    let persistence = Arc::new(MessagePersistence::new(pool.clone()));
+    persistence.initialize_database().await?;
+    info!("数据库表结构初始化完成");
+
+    // 初始化 OpenAI 客户端
+    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let base_url = env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    
+    let config = OpenAIConfig::default()
+        .with_api_key(api_key)
+        .with_api_base(base_url);
+    
+    let client = Client::with_config(config);
+    info!("OpenAI 客户端初始化成功");
+
+    // 创建并启动通道层
+    let channel_manager = Arc::new(
+        ChannelBuilder::new()
+            .with_max_queue_size(5000)
+            .with_worker_threads(4)
+            .with_message_timeout(300)
+            .with_persistence(true)
+            .build()
     );
     
-    // 初始化数据库连接池
-    let db_pool = database::create_db_pool().await?;
-    info!("Database connection pool created successfully");
-    
-    // 初始化Redis连接池
-    let redis_pool = database::create_redis_pool().await?;
-    info!("Redis connection pool created successfully");
-    
-    // 创建应用状态
-    let app_state = agent_parallel_system::AppState::new(db_pool.clone(), redis_pool.clone());
-    
-    // 初始化实时日志管理器（简化版本）
-    let realtime_log_manager = Arc::new(realtime_logging::RealtimeLogManager::new(
-        redis_pool.clone(),
-        db_pool.clone(),
-    ));
-    let app_state = app_state.with_realtime_log_manager(realtime_log_manager);
-    
-    // 构建 API 路由：同时挂载到根路径和配置前缀（兼容旧客户端）
-    let api_routes = Router::new()
-        .merge(routes::ui_routes())
-        .merge(routes::health_routes())
-        .merge(routes::auth_routes())
-        .merge(routes::task_routes())
-        .merge(routes::agent_routes())
-        .merge(routes::workspace_routes())
-        .merge(routes::workflow_routes())
-        .merge(routes::message_routes())
-        .merge(swagger_routes());
-        // 实时日志路由暂时禁用，等待完整实现
-        // .merge(routes::realtime_log_routes());
+    // 启动通道管理器
+    channel_manager.start().await?;
+    info!("通道层启动成功");
 
-    let api_prefix = config::CONFIG.server.api_prefix.clone();
-    let app = Router::new()
-        .merge(api_routes.clone())
-        .nest(&api_prefix, api_routes)
-        .layer(
-            CorsLayer::new()
-                .allow_origin("*".parse::<HeaderValue>().unwrap())
-                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-                .allow_headers(tower_http::cors::Any)
-        )
-        .layer(TraceLayer::new_for_http())
-        .with_state(app_state);
+    // 注册消息处理器
+    channel_manager.register_handler(Arc::new(ChatHandler::new())).await;
+    channel_manager.register_handler(Arc::new(TaskHandler::new())).await;
+    channel_manager.register_handler(Arc::new(SystemHandler::new())).await;
+    info!("消息处理器注册完成");
+
+    // 创建API接收器
+    let api_receiver = ReceiverFactory::create_api_receiver(Arc::clone(&channel_manager));
+
+    // 发送测试消息
+    let test_message = Message::new(
+        MessageSource::Api,
+        MessageType::Chat,
+        "test_user".to_string(),
+        "这是一条测试消息".to_string(),
+    ).with_priority(MessagePriority::Normal);
+
+    channel_manager.send_message(test_message).await?;
+    info!("测试消息已发送");
+
+    // 创建终端接收器并启动交互模式
+    let terminal_receiver = ReceiverFactory::create_terminal_receiver(Arc::clone(&channel_manager));
+    terminal_receiver.start_interactive_mode().await?;
+    info!("终端接收器启动成功");
+
+    // 启动后台任务
+    start_background_tasks(Arc::clone(&persistence), Arc::clone(&channel_manager)).await?;
+
+    // 示例：创建一个简单的聊天完成请求
+    if let Err(e) = openai_chat(&client).await {
+        error!("OpenAI 测试失败: {}", e);
+    }
+
+    info!("HTTP 服务器启动在 http://0.0.0.0:8001");
+    info!("API 端点:");
+    info!("  POST /message  - 通用消息接口");
+    info!("  POST /chat     - 聊天消息接口");
+    info!("  POST /task     - 任务消息接口");
+    info!("  POST /system   - 系统消息接口");
+
+    // 启动 HTTP 服务器
+    let server_result = HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(Arc::clone(&api_receiver)))
+            .app_data(web::Data::new(Arc::clone(&persistence)))
+            .configure(|cfg| configure_api_routes(cfg, Arc::clone(&api_receiver)))
+            .route("/", web::get().to(index))
+            .route("/health", web::get().to(health_check))
+            .route("/stats", web::get().to(get_stats))
+            .route("/test", web::get().to(test_endpoint))
+    })
+    .bind(("0.0.0.0", 8001))?
+    .run()
+    .await;
     
-    // 启动服务器
-    let addr = SocketAddr::from((
-        config::CONFIG.server.host.parse::<std::net::IpAddr>()?,
-        config::CONFIG.server.port,
-    ));
+    // 停止通道层
+    channel_manager.stop().await?;
     
-    info!("Server listening on http://{}", addr);
-    info!("API prefix mounted at {}", api_prefix);
-    
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    match server_result {
+        Ok(_) => info!("服务器正常关闭"),
+        Err(e) => error!("服务器错误: {}", e),
+    }
     
     Ok(())
 }
 
-/// 启动后台工作器
-async fn start_worker() -> anyhow::Result<()> {
-    info!(
-        "Starting worker for {} v{} in {} environment",
-        config::CONFIG.app_name,
-        env!("CARGO_PKG_VERSION"),
-        config::CONFIG.environment
-    );
-    
-    // 初始化数据库连接池
-    let db_pool = database::create_db_pool().await?;
-    info!("Database connection pool created successfully");
-    
-    // 初始化Redis连接池
-    let redis_pool = database::create_redis_pool().await?;
-    info!("Redis connection pool created successfully");
-    
-    // 启动任务工作器
-    task_worker::start_worker(db_pool, redis_pool).await?;
-    
-    Ok(()) 
+/// 启动后台任务
+async fn start_background_tasks(
+    persistence: Arc<MessagePersistence>,
+    channel_manager: Arc<ChannelManager>,
+) -> Result<()> {
+    // 启动消息统计任务
+    let stats_persistence = Arc::clone(&persistence);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 每5分钟
+        
+        loop {
+            interval.tick().await;
+            
+            match stats_persistence.get_statistics(7).await {
+                Ok(stats) => {
+                    info!(
+                        "消息统计 (7天): 总数={}, 成功={}, 失败={}, 成功率={:.1}%, 平均处理时间={:.2}s",
+                        stats.total_messages,
+                        stats.successful_messages,
+                        stats.failed_messages,
+                        stats.success_rate(),
+                        stats.avg_processing_time_seconds
+                    );
+                }
+                Err(e) => {
+                    error!("获取消息统计失败: {}", e);
+                }
+            }
+        }
+    });
+
+    // 启动清理任务
+    let cleanup_persistence = Arc::clone(&persistence);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // 每小时
+        
+        loop {
+            interval.tick().await;
+            
+            match cleanup_persistence.cleanup_expired_messages().await {
+                Ok(count) => {
+                    if count > 0 {
+                        info!("清理了 {} 条过期消息", count);
+                    }
+                }
+                Err(e) => {
+                    error!("清理过期消息失败: {}", e);
+                }
+            }
+        }
+    });
+
+    Ok(())
 }
 
-/// 运行数据库迁移
-async fn run_migrations() -> anyhow::Result<()> {
-    info!("Running database migrations...");
+/// 健康检查接口
+async fn health_check() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "healthy",
+        "timestamp": chrono::Utc::now(),
+        "service": "agent-parallel-system"
+    }))
+}
+
+/// 获取统计信息接口
+async fn get_stats(
+    persistence: web::Data<Arc<MessagePersistence>>,
+) -> Result<HttpResponse, actix_web::Error> {
+    match persistence.get_statistics(7).await {
+        Ok(stats) => Ok(HttpResponse::Ok().json(serde_json::json!({
+            "total_messages": stats.total_messages,
+            "successful_messages": stats.successful_messages,
+            "failed_messages": stats.failed_messages,
+            "success_rate": format!("{:.1}%", stats.success_rate()),
+            "avg_processing_time_seconds": stats.avg_processing_time_seconds
+        }))),
+        Err(e) => {
+            error!("获取统计信息失败: {}", e);
+            Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "获取统计信息失败"
+            })))
+        }
+    }
+}
+
+async fn openai_chat(client: &Client<OpenAIConfig>) -> Result<()> {
+    info!("开始测试 OpenAI 聊天功能...");
     
-    // 初始化数据库连接池 
-    let _db_pool = database::create_db_pool().await?;
-    
-    // 这里可以添加具体的迁移逻辑
-    // 目前我们使用Docker Compose来运行SQL文件
-    info!("Migrations will be applied by Docker Compose during startup");
+    let request = CreateChatCompletionRequestArgs::default()
+        .max_tokens(100u32)
+        .model("deepseek-chat")
+        .messages([
+            ChatCompletionRequestSystemMessage::from("你是一个有用的助手。").into(),
+        ])
+        .build()?;
+
+    let response = client.chat().create(request).await?;
+
+    info!("OpenAI 响应:");
+    for choice in response.choices {
+        info!("角色: {}, 内容: {:?}", choice.message.role, choice.message.content);
+    }
     
     Ok(())
 }
 
-/// 显示系统信息
-async fn show_info() -> anyhow::Result<()> {
-    println!("基于LLM的多智能体并行协作系统");
-    println!("版本: {}", env!("CARGO_PKG_VERSION"));
-    println!("环境: {}", config::CONFIG.environment);
-    println!("应用名称: {}", config::CONFIG.app_name);
-    println!("服务器地址: {}:{}", config::CONFIG.server.host, config::CONFIG.server.port);
-    println!("API前缀: {}", config::CONFIG.server.api_prefix);
-    println!("数据库URL: {}", config::CONFIG.database.url);
-    println!("Redis URL: {}", config::CONFIG.redis.url);
-    
-    Ok(())
+async fn index() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "message": "Agent Parallel System",
+        "endpoints": [
+            "POST /message",
+            "POST /chat",
+            "POST /task",
+            "POST /system",
+            "GET /health",
+            "GET /stats",
+            "GET /test"
+        ]
+    }))
+}
+
+async fn test_endpoint() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "status": "ok",
+        "message": "测试端点正常工作"
+    }))
 }
