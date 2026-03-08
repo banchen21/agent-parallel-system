@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS messages (
     
     -- 发送和接收信息
     sender VARCHAR(255) NOT NULL,          -- 发送者标识
+    source_ip VARCHAR(45) NOT NULL,        -- 消息来源IP地址
     recipient VARCHAR(255),                -- 接收者标识（可选，为空则广播）
     content TEXT NOT NULL,                 -- 消息内容
     
@@ -40,6 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient);
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+CREATE INDEX IF NOT EXISTS idx_messages_source_ip ON messages(source_ip);
 CREATE INDEX IF NOT EXISTS idx_messages_message_type ON messages(message_type);
 CREATE INDEX IF NOT EXISTS idx_messages_priority ON messages(priority);
 CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source);
