@@ -1,11 +1,12 @@
 // HTTP 处理函数
 use super::model::UserMessage;
+use crate::ChannelManagerActor;
+use crate::chat::actor_messages::{GetMessages, SaveMessage};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::{MessageContent, MessageType};
-use crate::{ChannelManagerActor, channel::actor_manager::SaveMessage};
 use actix::Addr;
-use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, web};
-use chrono::Utc;
+use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, get, post, web};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
@@ -19,6 +20,7 @@ pub struct ChatRequest {
 }
 
 /// 处理通用消息 - 支持新的 UserMessage 格式
+#[post("/message")]
 pub async fn handle_message(
     chat_request: web::Json<ChatRequest>,
     chat_agent: web::Data<Addr<ChatAgent>>,
@@ -31,24 +33,12 @@ pub async fn handle_message(
         .peer_addr()
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    debug!("🌍 客户端IP: {}", client_ip);
 
-    // 解析JSON请求体
-    debug!("📥 开始解析JSON请求体...");
     let chat_request = match serde_json::from_str::<ChatRequest>(
         &serde_json::to_string(&chat_request).unwrap_or_default(),
     ) {
-        Ok(req) => {
-            debug!(
-                "✅ JSON解析成功: user={}, content_length={}, metadata_keys={:?}",
-                req.user,
-                req.content.len(),
-                req.metadata.keys().collect::<Vec<_>>()
-            );
-            req
-        }
+        Ok(req) => req,
         Err(e) => {
-            error!("❌ JSON解析失败: {}", e);
             return Ok(HttpResponse::BadRequest().json(serde_json::json!({
                 "error": "Invalid JSON format",
                 "details": e.to_string()
@@ -59,7 +49,6 @@ pub async fn handle_message(
     let metadata = chat_request.metadata.clone();
 
     // 构造 UserMessage
-    debug!("🏗️ 构造UserMessage...");
     let user_message = UserMessage {
         user: chat_request.user.clone(),
         content: MessageContent::Text(chat_request.content.clone()),
@@ -69,13 +58,7 @@ pub async fn handle_message(
         created_at: Utc::now(),
     };
 
-    debug!(
-        "📝 UserMessage构造完成: user={}, message_type={:?}, source_ip={}",
-        user_message.user, user_message.message_type, user_message.source_ip
-    );
-
     // 保存消息到数据库
-    debug!("💾 开始保存消息到数据库...");
     let db_save_start = std::time::Instant::now();
     let save_message = SaveMessage {
         message: user_message.clone(),
@@ -85,41 +68,31 @@ pub async fn handle_message(
         Ok(result) => match result {
             Ok(_) => {
                 debug!(
-                    "✅ 消息保存到数据库成功，耗时: {:?}",
+                    "消息保存到数据库成功，耗时: {:?}",
                     db_save_start.elapsed()
                 );
             }
             Err(e) => {
                 warn!(
-                    "⚠️ 消息保存到数据库失败: {}，耗时: {:?}",
+                    "消息保存到数据库失败: {}，耗时: {:?}",
                     e,
                     db_save_start.elapsed()
                 );
             }
         },
         Err(e) => {
-            error!("❌ 发送保存消息到ChannelManager失败: {}", e);
+            error!("发送保存消息到ChannelManager失败: {}", e);
         }
     }
 
-    // 发送消息给 ChatAgent 处理
-    debug!("🤖 开始发送消息给ChatAgent处理...");
     let agent_start = std::time::Instant::now();
-
-    // 添加处理状态日志，让前端知道正在处理
-    debug!("⏳ 正在处理用户消息，请稍候...");
 
     let chat_agent_response = chat_agent
         .send(OtherUserMessage {
             content: user_message.clone(),
         })
         .await;
-
-    debug!("⏱️ ChatAgent处理完成， 预览响应: {:?}", chat_agent_response);
-
     let agent_duration = agent_start.elapsed();
-    debug!("⏱️ ChatAgent处理耗时: {:?}", agent_duration);
-
     // 处理 ChatAgent 的响应
     match chat_agent_response {
         Ok(Ok(agent_response)) => {
@@ -132,20 +105,20 @@ pub async fn handle_message(
                 Ok(result) => match result {
                     Ok(_) => {
                         debug!(
-                            "✅ ChatAgent响应保存到数据库成功，耗时: {:?}",
+                            "ChatAgent响应保存到数据库成功，耗时: {:?}",
                             response_save_start.elapsed()
                         );
                     }
                     Err(e) => {
                         warn!(
-                            "⚠️ ChatAgent响应保存到数据库失败: {}，耗时: {:?}",
+                            "ChatAgent响应保存到数据库失败: {}，耗时: {:?}",
                             e,
                             response_save_start.elapsed()
                         );
                     }
                 },
                 Err(e) => {
-                    error!("❌ 发送保存ChatAgent响应到ChannelManager失败: {}", e);
+                    error!("发送保存ChatAgent响应到ChannelManager失败: {}", e);
                 }
             }
             Ok(HttpResponse::Ok().json(agent_response))
@@ -170,9 +143,60 @@ pub async fn handle_message(
     }
 }
 
-// 获取消息历史
-pub async fn get_message_history() -> ActixResult<HttpResponse> {
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "message": "消息历史接口 - 待实现"
-    })))
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub limit: Option<i64>,
+    // 必须添加这个字段，对应的 URL 参数是 ?before=2023-10-01T10:00:00Z
+    pub before: Option<DateTime<Utc>>,
+}
+
+#[get("/message")]
+pub async fn get_message_history(
+    query: web::Query<HistoryQuery>,
+    channel_manager: web::Data<Addr<ChannelManagerActor>>,
+    user: web::ReqData<String>,
+) -> ActixResult<HttpResponse> {
+    // 获取用户名字符串
+    let username = user.into_inner();
+    // 调用 Actor
+    let result = channel_manager
+        .send(GetMessages {
+            user: username, // 使用中间件解析出的用户名
+            before: query.before,
+            limit: query.limit.unwrap_or(20),
+        })
+        .await;
+
+    match result {
+        Ok(Ok(messages)) => {
+            let formatted_messages: Vec<serde_json::Value> = messages
+                .into_iter()
+                .map(|m| {
+                    let text = match m.content {
+                        MessageContent::Text(t) => t,
+                        _ => "非文本内容".to_string(),
+                    };
+
+                    serde_json::json!({
+                        "id": format!("{}-{}", m.user, m.created_at.timestamp_micros()),
+                        "role": if m.user == "ChatAgent" { "assistant" } else { "user" },
+                        "user": m.user,
+                        "content": text,
+                        "created_at": m.created_at,
+                    })
+                })
+                .collect();
+
+            Ok(HttpResponse::Ok().json(formatted_messages))
+        }
+        Ok(Err(e)) => {
+            error!("获取历史记录数据库错误: {}", e);
+            Ok(HttpResponse::InternalServerError()
+                .json(serde_json::json!({ "error": e.to_string() })))
+        }
+        Err(e) => {
+            error!("Actor 通信错误: {}", e);
+            Ok(HttpResponse::InternalServerError().finish())
+        }
+    }
 }

@@ -1,6 +1,6 @@
 use actix::prelude::*;
 use anyhow::Result;
-use sqlx::{PgPool};
+use sqlx::PgPool;
 use tracing::{debug, error, info};
 
 /// 数据库管理器
@@ -17,7 +17,7 @@ impl DatabaseManager {
     pub async fn initialize_database(&self) -> Result<()> {
         info!("正在初始化数据库表结构...");
 
-        // 1. 创建 messages 表
+        // 创建 messages 表
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS messages (
@@ -28,12 +28,12 @@ impl DatabaseManager {
                 metadata JSONB,
                 created_at TIMESTAMPTZ NOT NULL
             );
-            "#
+            "#,
         )
         .execute(&self.pool)
         .await?;
 
-        // 2. 创建 users 表
+        // 创建 users 表
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS users (
@@ -41,12 +41,19 @@ impl DatabaseManager {
                 username VARCHAR(50) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 email VARCHAR(255) UNIQUE,
-                role VARCHAR(20) NOT NULL DEFAULT 'user',
-                is_active BOOLEAN NOT NULL DEFAULT true,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            "#
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 添加索引
+        sqlx::query(
+            r#"
+    CREATE INDEX IF NOT EXISTS idx_messages_user_created_at ON messages ("user", created_at DESC);
+    "#,
         )
         .execute(&self.pool)
         .await?;
@@ -75,9 +82,7 @@ impl Handler<InitializeDatabase> for DatabaseManager {
     fn handle(&mut self, _msg: InitializeDatabase, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
         let this = DatabaseManager::new(pool); // 或者直接调用内部逻辑
-        
-        Box::pin(async move {
-            this.initialize_database().await
-        })
+
+        Box::pin(async move { this.initialize_database().await })
     }
 }

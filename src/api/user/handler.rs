@@ -1,12 +1,12 @@
 use crate::api::auth_utils::{generate_tokens, validate_token};
 use crate::api::redis_actor::{RedisActor, SaveRefreshToken, VerifyAndConsumeToken};
-use crate::api::user::actor_manager::{CreateUser, GetUserByUsername, UserManagerActor};
+use crate::api::user::actor_user::{CreateUser, GetUserByUsername, UserManagerActor};
 use crate::api::user::model::{AuthResponse, LoginRequest, RegisterRequest};
 use actix::Addr;
 use actix_web::{HttpMessage as _, HttpRequest, HttpResponse, Responder, post, web};
 use bcrypt::{DEFAULT_COST, hash, verify};
 use reqwest::header::AUTHORIZATION;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// 1. 注册接口
 #[post("/register")]
@@ -105,7 +105,11 @@ pub async fn refresh(redis_actor: web::Data<Addr<RedisActor>>, req: HttpRequest)
 
     // 2. 本地验证 JWT 签名
     let _claims = match validate_token(&refresh_token) {
-        Ok(c) => c,
+        Ok(c) => {
+            if c.token_type != "refresh" {
+                return HttpResponse::BadRequest().body("Token 不是 Refresh Token");
+            }
+        }
         Err(e) => return HttpResponse::Unauthorized().body(format!("Invalid Token: {}", e)),
     };
 
@@ -130,20 +134,19 @@ pub async fn refresh(redis_actor: web::Data<Addr<RedisActor>>, req: HttpRequest)
             }
 
             // 5. 生成新的一对 Token
-            let (new_at, new_rt) = generate_tokens(&username);
-
+            let (access_token, refresh_token) = generate_tokens(&username);
             // 6. ✅ 将新 RT 存入 Redis
             let _ = redis_actor
                 .send(SaveRefreshToken {
-                    token: new_rt.clone(),
+                    token: refresh_token.clone(),
                     username: username.clone(),
                     expires_in_seconds: 7 * 24 * 3600,
                 })
                 .await;
 
             HttpResponse::Ok().json(AuthResponse {
-                access_token: new_at,
-                refresh_token: new_rt,
+                access_token,
+                refresh_token,
             })
         }
         Ok(None) => HttpResponse::Unauthorized().body("Token 已失效或已被使用"),

@@ -1,3 +1,3 @@
-pub mod model;
-pub mod actor_manager;
+pub mod actor_user;
 pub mod handler;
+pub mod model;

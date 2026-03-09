@@ -1,9 +1,9 @@
 use actix::{Actor, Context, Handler, Message, ResponseFuture};
-use log::info;
 use anyhow::Result;
-use tracing::{debug,error};
+use log::info;
+use tracing::{debug, error};
 
-use crate::api::user::model::{User};
+use crate::api::user::model::User;
 
 pub struct UserManagerActor {
     pool: sqlx::PgPool,
@@ -23,7 +23,6 @@ impl UserManagerActor {
     }
 }
 
-
 /// Actor 消息：创建新用户（注册）
 #[derive(Message)]
 #[rtype(result = "Result<User>")]
@@ -39,7 +38,7 @@ impl Handler<CreateUser> for UserManagerActor {
 
     fn handle(&mut self, msg: CreateUser, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
-        
+
         Box::pin(async move {
             debug!("👤 正在创建用户: {}", msg.username);
 
@@ -65,8 +64,6 @@ impl Handler<CreateUser> for UserManagerActor {
     }
 }
 
-
-
 /// Actor 消息：根据用户名查找用户（登录/鉴权用）
 #[derive(Message)]
 #[rtype(result = "Result<Option<User>>")]
@@ -82,16 +79,14 @@ impl Handler<GetUserByUsername> for UserManagerActor {
         let pool = self.pool.clone();
 
         Box::pin(async move {
-            let user = sqlx::query_as::<_, User>(
-                "SELECT * FROM users WHERE username = $1 LIMIT 1"
-            )
-            .bind(msg.username)
-            .fetch_optional(&pool)
-            .await
-            .map_err(|e| {
-                error!("❌ 查询用户失败: {}", e);
-                anyhow::anyhow!("数据库查询失败")
-            })?;
+            let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username = $1 LIMIT 1")
+                .bind(msg.username)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| {
+                    error!("❌ 查询用户失败: {}", e);
+                    anyhow::anyhow!("数据库查询失败")
+                })?;
 
             Ok(user)
         })
@@ -121,7 +116,6 @@ impl Handler<UpdateRefreshToken> for UserManagerActor {
     }
 }
 
-
 /// 根据 Refresh Token 查找用户
 #[derive(Message)]
 #[rtype(result = "Result<Option<User>>")]
@@ -134,10 +128,11 @@ impl Handler<GetUserByRefreshToken> for UserManagerActor {
     fn handle(&mut self, msg: GetUserByRefreshToken, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
         Box::pin(async move {
-            let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE refresh_token = $1 LIMIT 1")
-                .bind(msg.refresh_token)
-                .fetch_optional(&pool)
-                .await?;
+            let user =
+                sqlx::query_as::<_, User>("SELECT * FROM users WHERE refresh_token = $1 LIMIT 1")
+                    .bind(msg.refresh_token)
+                    .fetch_optional(&pool)
+                    .await?;
             Ok(user)
         })
     }

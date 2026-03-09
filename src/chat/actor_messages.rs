@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tracing::{debug, error, info};
 
-use crate::chat::{
-    model::MediaType, model::MessageContent, model::UserMessage,
-};
+use crate::chat::model::{MediaType, MessageContent, MessageType, UserMessage};
 
 /// Actor消息类型定义
 #[derive(Message)]
@@ -140,6 +138,74 @@ impl Handler<SaveMessage> for ChannelManagerActor {
             debug!("✅ 保存成功: id={}, user={}", id, message.user);
 
             Ok(SaveMessageResult { message })
+        })
+    }
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub user: String,
+    pub limit: Option<i64>,
+    pub before: Option<chrono::DateTime<chrono::Utc>>, // 分页游标
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<Vec<UserMessage>>")]
+pub struct GetMessages {
+    pub user: String, // 聊天历史通常必须指定用户
+    pub before: Option<chrono::DateTime<chrono::Utc>>,
+    pub limit: i64,
+}
+
+impl Handler<GetMessages> for ChannelManagerActor {
+    type Result = ResponseFuture<Result<Vec<UserMessage>>>;
+
+    fn handle(&mut self, msg: GetMessages, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+
+        Box::pin(async move {
+            // 构建分页查询
+            // 逻辑：查询用户本人或系统的回复，且时间小于游标
+            let rows = sqlx::query(
+                r#"
+                SELECT "user", source_ip, content, metadata, created_at 
+                FROM messages 
+                WHERE ("user" = $1 OR "user" = 'ChatAgent')
+                  AND ($2::timestamptz IS NULL OR created_at < $2)
+                ORDER BY created_at DESC 
+                LIMIT $3
+                "#,
+            )
+            .bind(&msg.user)
+            .bind(msg.before)
+            .bind(msg.limit)
+            .fetch_all(&pool)
+            .await?;
+
+            // 转换数据
+            let mut messages: Vec<UserMessage> = rows
+                .into_iter()
+                .map(|row| {
+                    let content_str: String = row.get("content");
+                    let metadata_json: Option<serde_json::Value> = row.get("metadata");
+
+                    UserMessage {
+                        user: row.get("user"),
+                        source_ip: row.get("source_ip"),
+                        content: MessageContent::Text(content_str),
+                        message_type: MessageType::Chat,
+                        metadata: metadata_json
+                            .and_then(|v| serde_json::from_value(v).ok())
+                            .unwrap_or_default(),
+                        created_at: row.get("created_at"),
+                    }
+                })
+                .collect();
+
+            // 关键：倒序查出来的（最新的在前面），显示时需要反转回正序
+            messages.reverse();
+
+            Ok(messages)
         })
     }
 }

@@ -1,11 +1,12 @@
-use std::future::{ready, Ready};
+use actix_web::http::header::AUTHORIZATION;
 use actix_web::{
-    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    error::ErrorUnauthorized,
     Error, HttpMessage,
+    dev::{Service, ServiceRequest, ServiceResponse, Transform, forward_ready},
+    error::ErrorUnauthorized,
 };
 use futures_util::future::LocalBoxFuture;
-use actix_web::http::header::AUTHORIZATION;
+use std::future::{Ready, ready};
+use tracing::debug;
 
 // 引入你的工具类
 use crate::api::auth_utils::validate_token;
@@ -46,37 +47,44 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        // 提取 Header
+        // 1. 提取 Header (注意：直接 unwrap 会在没有 Header 时导致进程崩溃，建议安全处理)
         let auth_header = req.headers().get(AUTHORIZATION);
 
-        // 使用 map_err 将 jsonwebtoken 的错误手动转换为 anyhow 错误，确保类型一致
-        let auth_result = (|| -> anyhow::Result<crate::api::auth_utils::Claims> {
-            let auth_val = auth_header.ok_or_else(|| anyhow::anyhow!("Missing Authorization header"))?;
-            let auth_str = auth_val.to_str().map_err(|_| anyhow::anyhow!("Invalid header encoding"))?;
-            
-            if !auth_str.starts_with("Bearer ") {
-                return Err(anyhow::anyhow!("Invalid token format"));
-            }
+        if auth_header.is_none() {
+            return Box::pin(async move { Err(ErrorUnauthorized("Missing Authorization Header")) });
+        }
 
-            let token = &auth_str[7..];
-            // 关键点：使用 .map_err(|e| anyhow::anyhow!(e)) 进行类型转换
-            validate_token(token).map_err(|e| anyhow::anyhow!(e))
-        })();
+        let auth_str = auth_header.unwrap().to_str().unwrap_or("");
 
-        match auth_result {
-            Ok(claims) => {
-                req.extensions_mut().insert(claims.sub.clone());
+        // 简单的格式校验
+        if !auth_str.starts_with("Bearer ") || auth_str.len() < 8 {
+            return Box::pin(async move { Err(ErrorUnauthorized("Invalid Token Format")) });
+        }
+        let token = auth_str.replace("Bearer ", "");
+
+        // 2. 验证 Token
+        match validate_token(&token) {
+            Ok(c) => {
+                if c.token_type != "access" {
+                    return Box::pin(async move {
+                        Err(ErrorUnauthorized("Token is not an Access Token"))
+                    });
+                }
+
+                // --- 验证成功逻辑 ---
+                // 将用户信息存入 extensions 供后续逻辑使用
+                req.extensions_mut().insert(c.sub.clone());
+
+                // 调用下一个服务 (真正的逻辑)
                 let fut = self.service.call(req);
                 Box::pin(async move {
                     let res = fut.await?;
                     Ok(res)
                 })
             }
-            Err(err) => {
-                let err_msg = err.to_string();
-                Box::pin(async move {
-                    Err(ErrorUnauthorized(format!("Unauthorized: {}", err_msg)))
-                })
+            Err(e) => {
+                // --- 验证失败逻辑 ---
+                Box::pin(async move { Err(ErrorUnauthorized(format!("Invalid Token: {}", e))) })
             }
         }
     }

@@ -1,32 +1,23 @@
 use actix::prelude::*;
 use anyhow::Result;
 use chrono::Utc;
-use futures::stream::{self, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
-use thiserror::Error;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
+use crate::chat::actor_messages::ChannelManagerActor;
+use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
+use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
+use crate::utils::json_util::clean_json_string;
 use crate::{chat, task_handler::task_model::MessageClassificationResponse};
 
 /// ChatAgent Actor结构体
 pub struct ChatAgent {
-    openai_client: async_openai::Client<async_openai::config::OpenAIConfig>,
-    channel_manager: Addr<crate::channel::actor_manager::ChannelManagerActor>,
+    open_aiproxy_actor: Addr<OpenAIProxyActor>,
+    channel_manager: Addr<ChannelManagerActor>,
+    agent_memory_manager: Addr<AgentMemoryHActor>,
     prompt_template: String,
     config: ChatAgentConfig,
-}
-
-/// 流式请求类型
-#[derive(Debug, Clone)]
-pub struct StreamRequest {
-    pub user: String,
-    pub content: String,
-    pub session_id: Option<String>,
 }
 
 /// ChatAgent配置
@@ -56,13 +47,15 @@ impl Default for ChatAgentConfig {
 
 impl ChatAgent {
     pub fn new(
-        channel_manager: Addr<crate::channel::actor_manager::ChannelManagerActor>,
-        openai_config: async_openai::config::OpenAIConfig,
+        channel_manager: Addr<ChannelManagerActor>,
+        neo4j_channel_manager: Addr<AgentMemoryHActor>,
+        open_aiproxy_actor: Addr<OpenAIProxyActor>,
         prompt_template: String,
     ) -> Self {
         Self {
-            openai_client: async_openai::Client::with_config(openai_config),
             channel_manager,
+            agent_memory_manager: neo4j_channel_manager,
+            open_aiproxy_actor,
             prompt_template,
             config: ChatAgentConfig::default(),
         }
@@ -98,73 +91,13 @@ impl ChatAgent {
             .replace("{user_input}", &format!("【用户内容】\n{}", user_input))
     }
 
-    /// 调用OpenAI API（带重试）
-    async fn call_openai_with_retry(&self, prompt: String) -> Result<String, ChatAgentError> {
-        let client = self.openai_client.clone();
-        let model = self.config.model.clone();
-        let max_tokens = self.config.max_tokens;
-        let timeout_secs = self.config.timeout_seconds;
-
-        // 手动实现重试逻辑
-        let mut retries = 0;
-        let max_retries = self.config.max_retries;
-
-        loop {
-            let request = async_openai::types::chat::CreateChatCompletionRequestArgs::default()
-                .model(model.clone())
-                .max_tokens(max_tokens)
-                .messages([
-                    async_openai::types::chat::ChatCompletionRequestUserMessageArgs::default()
-                        .content(prompt.clone())
-                        .build()?
-                        .into(),
-                ])
-                .build()?;
-
-            match timeout(
-                Duration::from_secs(timeout_secs),
-                client.chat().create(request),
-            )
-            .await
-            {
-                Ok(Ok(response)) => {
-                    if let Some(choice) = response.choices.first() {
-                        if let Some(content) = &choice.message.content {
-                            return Ok(content.clone());
-                        }
-                    }
-                    return Err(ChatAgentError::OpenAIError(
-                        async_openai::error::OpenAIError::InvalidArgument("空响应".to_string()),
-                    ));
-                }
-                Ok(Err(e)) => {
-                    error!("OpenAI调用失败: {}", e);
-                    retries += 1;
-                    if retries >= max_retries {
-                        return Err(ChatAgentError::OpenAIError(e));
-                    }
-                    // 指数退避等待
-                    let wait_time = Duration::from_secs(2u64.pow(retries));
-                    tokio::time::sleep(wait_time).await;
-                }
-                Err(_) => {
-                    error!("OpenAI调用超时");
-                    return Err(ChatAgentError::TimeoutError("超时".to_string()));
-                }
-            }
-        }
-    }
-
     /// 处理分类响应
     fn handle_classification(&self, content: String) -> Result<ChatAgentResponse, ChatAgentError> {
         match MessageClassificationResponse::from_json(&content) {
             Ok(classification) => {
-                debug!("预览消息:{:#?}", classification);
                 let response_message = chat::model::UserMessage {
                     user: "ChatAgent".to_string(),
-                    content: chat::model::MessageContent::Text(
-                        classification.clone().content,
-                    ),
+                    content: chat::model::MessageContent::Text(classification.clone().content),
                     message_type: chat::model::MessageType::Chat,
                     source_ip: "local".to_string(),
                     metadata: HashMap::new(),
@@ -213,30 +146,53 @@ impl Handler<OtherUserMessage> for ChatAgent {
     fn handle(&mut self, msg: OtherUserMessage, _ctx: &mut Self::Context) -> Self::Result {
         let this = self.clone();
         let user_input = msg.content.content.to_string();
+        let memory_manager = self.agent_memory_manager.clone();
+        let openai_actor = self.open_aiproxy_actor.clone();
+        let user_name = msg.content.user.clone();
 
         Box::pin(async move {
             debug!(
-                "📨 开始处理消息: {}",
-                user_input.chars().take(50).collect::<String>()
+                "📨 开始处理消息: 用户={}, 内容={}",
+                user_name,
+                user_input.chars().take(20).collect::<String>()
             );
 
-            // 1. 加载人格设定
-            let personality = this.load_personality_setting().await;
+            // 1 & 2. 【优化】并行加载人格设定和本地记忆
+            // 使用 tokio::join! 让两个耗时操作同时进行
+            let personality_task = this.load_personality_setting();
 
-            // 2. 构建提示词
-            let prompt = this.build_prompt(&personality, "", &user_input);
+            let memory_task = memory_manager.send(RequestMemory {
+                user_name: user_name.clone(),
+                message_content: user_input.clone(),
+            });
 
-            // 3. 调用OpenAI（带重试）
-            let response = match this.call_openai_with_retry(prompt).await {
-                Ok(r) => r,
+            let (personality, memory_mailbox_res) = tokio::join!(personality_task, memory_task);
+
+            // 处理记忆返回结果
+            let memory_content = match memory_mailbox_res {
+                Ok(inner_res) => match inner_res {
+                    Ok(content) => content,
+                    Err(e) => {
+                        warn!("⚠️ 记忆智能体业务处理失败: {}", e);
+                        "（该用户暂无相关历史记忆背景）".to_string()
+                    }
+                },
                 Err(e) => {
-                    error!("OpenAI调用最终失败: {}", e);
-                    return Err(e);
+                    error!("❌ 记忆智能体通信失败 (MailboxError): {}", e);
+                    "（认知系统离线，无法获取记忆背景）".to_string()
                 }
             };
 
-            // 4. 处理响应
-            this.handle_classification(response)
+            // 构建提示词
+            let prompt = this.build_prompt(&personality, &memory_content, &user_input);
+            let response_text = openai_actor
+                .send(CallOpenAI { prompt })
+                .await
+                .map_err(ChatAgentError::from)??;
+
+            // 5. 处理响应结果
+
+            this.handle_classification(clean_json_string(&response_text).to_string())
         })
     }
 }
@@ -244,32 +200,11 @@ impl Handler<OtherUserMessage> for ChatAgent {
 impl Clone for ChatAgent {
     fn clone(&self) -> Self {
         Self {
-            openai_client: self.openai_client.clone(),
+            open_aiproxy_actor: self.open_aiproxy_actor.clone(),
             channel_manager: self.channel_manager.clone(),
+            agent_memory_manager: self.agent_memory_manager.clone(),
             prompt_template: self.prompt_template.clone(),
             config: self.config.clone(),
         }
     }
-}
-
-/// 错误类型
-#[derive(Debug, Error)]
-pub enum ChatAgentError {
-    #[error("OpenAI API 调用失败: {0}")]
-    OpenAIError(#[from] async_openai::error::OpenAIError),
-
-    #[error("处理超时: {0}")]
-    TimeoutError(String),
-
-    #[error("序列化错误: {0}")]
-    SerializationError(#[from] serde_json::Error),
-
-    #[error("IO错误: {0}")]
-    IoError(#[from] std::io::Error),
-
-    #[error("任务加入失败: {0}")]
-    JoinError(#[from] tokio::task::JoinError),
-
-    #[error("重试失败: {0}")]
-    RetryError(String),
 }

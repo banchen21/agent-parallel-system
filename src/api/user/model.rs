@@ -1,9 +1,6 @@
-use actix::prelude::*;
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row};
-use tracing::{debug, error, info};
+use sqlx::FromRow;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -35,7 +32,6 @@ pub struct AuthResponse {
     pub access_token: String,
     pub refresh_token: String,
 }
-
 
 #[derive(Deserialize)]
 pub struct RefreshRequest {

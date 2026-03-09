@@ -1,7 +1,7 @@
 use actix::prelude::*;
 use anyhow::Result;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use tracing::{debug, error, info};
 
 /// Redis 管理器 Actor
@@ -63,8 +63,9 @@ impl Handler<SaveRefreshToken> for RedisActor {
         Box::pin(async move {
             let key = format!("rt:{}", msg.token);
             // SETEX: 设置值和过期时间（秒）
-            let _: () = conn.set_ex(&key, msg.username, msg.expires_in_seconds).await?;
-            debug!("Redis: 已保存 Token，Key: {}", key);
+            let _: () = conn
+                .set_ex(&key, msg.username, msg.expires_in_seconds)
+                .await?;
             Ok(())
         })
     }
@@ -77,16 +78,16 @@ impl Handler<VerifyAndConsumeToken> for RedisActor {
         let mut conn = self.conn_manager.clone();
         Box::pin(async move {
             let key = format!("rt:{}", msg.token);
-            
+
             // 1. 尝试获取关联的用户名
             let username: Option<String> = conn.get(&key).await?;
-            
+
             // 2. 如果存在，立即删除（确保 Token 只能使用一次，即 Token Rotation）
             if username.is_some() {
                 let _: () = conn.del(&key).await?;
                 debug!("Redis: 已消耗 Token，Key: {}", key);
             }
-            
+
             Ok(username)
         })
     }
