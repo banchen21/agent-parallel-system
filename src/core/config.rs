@@ -11,10 +11,16 @@ pub struct Settings {
     pub environment: String,
     pub app_url: String,
     pub chat_agent: ChatAgentConfig,
+    pub memory_agent: MemoryAgentConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatAgentConfig {
+    pub prompt_template: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MemoryAgentConfig {
     pub prompt_template: String,
 }
 
@@ -38,10 +44,14 @@ impl Settings {
 请严格按照json回复。
 以下是json格式:{context:""}"#,
             )?
+            .set_default(
+                "memory_agent.prompt_template",
+                r#"用户消息内容：{context:""}
+请严格按照json回复。
+以下是json格式:{context:""}"#,
+            )?
             // 从配置文件加载
             .add_source(File::with_name(default_config_path).required(true))
-            // 从环境变量加载（带前缀APP_）
-            .add_source(Environment::with_prefix("APP").separator("_"))
             // 从.env文件加载
             .add_source(
                 Environment::with_prefix("APP")
@@ -82,8 +92,6 @@ prompt_template = """用户消息内容：{context:""}
                 .map_err(|e| ConfigError::Message(format!("无法创建默认配置文件: {}", e)))?;
 
             info!("默认配置文件 {} 创建成功", config_path);
-        } else {
-            info!("使用现有配置文件: {}", config_path);
         }
 
         Ok(())

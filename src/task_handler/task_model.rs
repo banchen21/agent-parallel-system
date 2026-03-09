@@ -20,7 +20,7 @@ pub struct MessageClassificationResponse {
 
     /// 分类原因
     #[serde(rename = "reason")]
-    pub reason: String,
+    pub reason: Option<String>,
 
     /// 任务列表（可能为null）
     #[serde(rename = "tasks")]
@@ -97,7 +97,7 @@ impl MessageClassificationResponse {
             is_task,
             confidence,
             content,
-            reason,
+            reason: Some(reason),
             tasks,
         }
     }
@@ -134,7 +134,7 @@ impl Default for MessageClassificationResponse {
             is_task: false,
             confidence: 0.0,
             content: String::new(),
-            reason: String::new(),
+            reason: None,
             tasks: None,
         }
     }

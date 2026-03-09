@@ -81,26 +81,21 @@ async fn main() -> Result<()> {
         .await?;
     info!("PostgreSQL 连接成功");
 
-    // neo4j
+    // neo4j 图数据库+智能记忆管理
+    let agent_memory_prompt_template = CONFIG.memory_agent.prompt_template.clone();
     let neo4j_uri = env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
     let neo4j_user = env::var("NEO4J_USERNAME").unwrap_or_else(|_| "neo4j".to_string());
-    let neo4j_pass = env::var("DATABASE_URL").unwrap_or_else(|_| "neo4j".to_string());
-
+    let neo4j_pass = env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j".to_string());
     let agent_memory_hactor = AgentMemoryHActor::new(
         &neo4j_uri,
         &neo4j_user,
         &neo4j_pass,
         open_aiproxy_actor.clone(),
+        agent_memory_prompt_template
     )
     .await
     .expect("无法连接到 Neo4j");
     let agent_memory_hactor_addr = agent_memory_hactor.start();
-    let _ = agent_memory_hactor_addr
-        .send(RequestMemory {
-            message_content: "Neo4j 连接成功".to_string(),
-            user_name: "banchen".to_string(),
-        })
-        .await;
     info!("Neo4j 连接成功");
 
     // Redis

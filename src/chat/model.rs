@@ -21,6 +21,12 @@ pub struct UserMessage {
     pub created_at: DateTime<Utc>,
 }
 
+impl UserMessage {
+    fn to_string(&self) -> String {
+        serde_json::to_string(self).unwrap()
+    }
+}
+
 /// 消息类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageType {

@@ -2,15 +2,15 @@ use actix::prelude::*;
 use async_openai::Client;
 use async_openai::config::OpenAIConfig;
 use std::time::Duration;
-use tokio::time::timeout;
 use thiserror::Error;
+use tokio::time::timeout;
 /// 错误类型
 #[derive(Debug, Error)]
 pub enum ChatAgentError {
     #[error("OpenAI API 调用失败: {0}")]
     OpenAIError(#[from] async_openai::error::OpenAIError),
 
-     #[error("Actor 通信失败: {0}")]
+    #[error("Actor 通信失败: {0}")]
     MailboxError(#[from] actix::MailboxError),
 
     #[error("处理超时: {0}")]
@@ -22,16 +22,11 @@ pub enum ChatAgentError {
     #[error("IO错误: {0}")]
     IoError(#[from] std::io::Error),
 
+    #[error("图数据库错误: {0}")]
+    GraphError(#[from] neo4rs::Error),
+
     #[error("任务加入失败: {0}")]
     JoinError(#[from] tokio::task::JoinError),
-}
-
-
-
-#[derive(Message)]
-#[rtype(result = "Result<String, ChatAgentError>")]
-pub struct CallOpenAI {
-    pub prompt: String,
 }
 
 pub struct OpenAIProxyActor {
@@ -56,6 +51,12 @@ impl OpenAIProxyActor {
 
 impl Actor for OpenAIProxyActor {
     type Context = Context<Self>;
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<String, ChatAgentError>")]
+pub struct CallOpenAI {
+    pub prompt: String,
 }
 
 impl Handler<CallOpenAI> for OpenAIProxyActor {
@@ -95,7 +96,12 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
                 };
 
                 // 执行请求并带超时
-                match timeout(Duration::from_secs(timeout_secs), client.chat().create(request)).await {
+                match timeout(
+                    Duration::from_secs(timeout_secs),
+                    client.chat().create(request),
+                )
+                .await
+                {
                     Ok(Ok(response)) => {
                         if let Some(choice) = response.choices.first() {
                             if let Some(content) = &choice.message.content {
@@ -120,8 +126,6 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
         };
 
         // 3. 关键修复：使用 wrap_future 并显式转换成 Box::pin 的特质对象
-        Box::pin(
-            fut.into_actor(self)
-        )
+        Box::pin(fut.into_actor(self))
     }
 }

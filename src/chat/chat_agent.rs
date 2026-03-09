@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
-use crate::chat::actor_messages::ChannelManagerActor;
+use crate::chat::actor_messages::{ChannelManagerActor, GetMessages};
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
 use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
 use crate::utils::json_util::clean_json_string;
@@ -80,15 +80,21 @@ impl ChatAgent {
     }
 
     /// 构建提示词
-    fn build_prompt(&self, personality: &str, memory: &str, user_input: &str) -> String {
+    fn build_prompt(
+        &self,
+        personality: &str,
+        memory: &str,
+        user_input: &str,
+        momory_content_short: Vec<chat::model::UserMessage>,
+    ) -> String {
         self.prompt_template
+            .replace("{personality_setting}", &format!("{}", personality))
+            .replace("{memory_content}", &format!("{}", memory))
+            .replace("{user_input}", &format!("{}", user_input))
             .replace(
-                "{personality_setting}",
-                &format!("【人格设定】\n{}", personality),
+                "{momory_content_short}",
+                &format!("{:#?}", momory_content_short),
             )
-            // TODO: 记忆压缩
-            .replace("{memory_content}", &format!("\n【本地记忆】\n{}", memory))
-            .replace("{user_input}", &format!("【用户内容】\n{}", user_input))
     }
 
     /// 处理分类响应
@@ -149,16 +155,9 @@ impl Handler<OtherUserMessage> for ChatAgent {
         let memory_manager = self.agent_memory_manager.clone();
         let openai_actor = self.open_aiproxy_actor.clone();
         let user_name = msg.content.user.clone();
+        let channel_manager = self.channel_manager.clone();
 
         Box::pin(async move {
-            debug!(
-                "📨 开始处理消息: 用户={}, 内容={}",
-                user_name,
-                user_input.chars().take(20).collect::<String>()
-            );
-
-            // 1 & 2. 【优化】并行加载人格设定和本地记忆
-            // 使用 tokio::join! 让两个耗时操作同时进行
             let personality_task = this.load_personality_setting();
 
             let memory_task = memory_manager.send(RequestMemory {
@@ -183,15 +182,42 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 }
             };
 
+            let momory_content_short = match channel_manager
+                .send(GetMessages {
+                    user: user_name, // 使用中间件解析出的用户名
+                    // 时间点
+                    before: Some(msg.content.created_at),
+                    limit: 5,
+                })
+                .await
+            {
+                Ok(dd) => match dd {
+                    Ok(msgs) => msgs,
+                    Err(e) => {
+                        error!("❌ 获取消息历史失败: {}", e);
+                        vec![]
+                    }
+                },
+                Err(_) => {
+                    vec![]
+                }
+            };
+
             // 构建提示词
-            let prompt = this.build_prompt(&personality, &memory_content, &user_input);
+            let prompt = this.build_prompt(
+                &personality,
+                &memory_content,
+                &(user_input.to_string()
+                    + "当前时间是: "
+                    + &chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+                momory_content_short,
+            );
             let response_text = openai_actor
                 .send(CallOpenAI { prompt })
                 .await
                 .map_err(ChatAgentError::from)??;
 
             // 5. 处理响应结果
-
             this.handle_classification(clean_json_string(&response_text).to_string())
         })
     }

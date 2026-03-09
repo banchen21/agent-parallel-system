@@ -3,77 +3,29 @@ use anyhow::Result;
 use neo4rs::{Graph, query};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 
-// 引用之前定义的 OpenAI Actor 和 错误类型
-use crate::{chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor}, utils::json_util::clean_json_string};
+// 引用你的工程中已有的模块
+use crate::{
+    chat::{
+        chat_agent::ChatAgentConfig,
+        openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor},
+    },
+    utils::json_util::clean_json_string,
+};
 
-// --- 记忆指令结构（用于解析 AI 的决策） ---
+// --- 数据结构定义 ---
 
-#[derive(Debug, Deserialize, Serialize, Default)]
-pub struct MemoryUpdate {
-    pub commands: Vec<String>, // AI 生成的 Cypher MERGE/SET 语句
+/// 从人格设定中提取的“本我”结构
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct AssistantIdentity {
+    pub name: String,        // 名字，如“齐悦”
+    pub role: String,        // 角色，如“赛博女儿”
+    pub traits: Vec<String>, // 性格标签
+    pub core_goal: String,   // 核心目标
 }
 
-// --- Actix 消息定义 ---
-
-
-
-// --- Actor 定义 ---
-
-pub struct AgentMemoryHActor {
-    pub graph: Graph,
-    pub open_aiproxy_actor: Addr<OpenAIProxyActor>,
-}
-
-impl AgentMemoryHActor {
-    pub async fn new(uri: &str, user: &str, pass: &str, open_aiproxy_actor: Addr<OpenAIProxyActor>) -> Result<Self> {
-        let graph = Graph::new(uri, user, pass).await?;
-        Ok(Self {
-            graph,
-            open_aiproxy_actor,
-        })
-    }
-
-    /// 内部逻辑：将 AI 提取的知识持久化到 Neo4j
-    async fn persist_ai_thoughts(graph: Arc<Graph>, ai_json: String) -> Result<()> {
-        // 【关键修复】复用清洗逻辑，处理 AI 可能返回的 ```json 标签
-        let cleaned_json = clean_json_string(&ai_json);
-        
-        debug!("尝试持久化记忆指令: {}", cleaned_json);
-
-        if let Ok(update) = serde_json::from_str::<MemoryUpdate>(cleaned_json) {
-            for statement in update.commands {
-                if !statement.is_empty() {
-                    // 过滤掉 AI 可能生成的非法注释或空行
-                    if statement.trim().is_empty() { continue; }
-                    
-                    let q = query(&statement);
-                    if let Err(e) = graph.run(q).await {
-                        error!("❌ 自主记忆写入失败: {}, 语句: {}", e, statement);
-                    } else {
-                        debug!("✅ 记忆指令执行成功: {}", statement);
-                    }
-                }
-            }
-        } else {
-            warn!("⚠️ 记忆智能体解析 AI 指令失败，AI 可能没有按 JSON 格式输出或输出为空");
-        }
-        Ok(())
-    }
-
-}
-
-impl Actor for AgentMemoryHActor {
-    type Context = Context<Self>;
-
-    fn started(&mut self, _ctx: &mut Self::Context) {
-        info!("🧠 记忆管理智能体 (AgentMemoryHActor) 已启动");
-    }
-}
-
-
-/// 唯一的入口消息：ChatAgent 只传这两个字段
+/// 外部请求消息：仅传入用户名和当前对话内容
 #[derive(Message)]
 #[rtype(result = "Result<String, ChatAgentError>")]
 pub struct RequestMemory {
@@ -81,6 +33,241 @@ pub struct RequestMemory {
     pub message_content: String,
 }
 
+// --- Actor 定义 ---
+
+pub struct AgentMemoryHActor {
+    pub graph: Graph,
+    pub open_aiproxy_actor: Addr<OpenAIProxyActor>,
+    pub config: ChatAgentConfig,
+    // 状态：当前“本我”的识别名，初始默认为 Assistant
+    pub ai_name: String,
+    pub agent_memory_prompt_template: String,
+}
+
+impl AgentMemoryHActor {
+    /// 初始化并启动 Actor
+    pub async fn new(
+        uri: &str,
+        user: &str,
+        pass: &str,
+        open_aiproxy_actor: Addr<OpenAIProxyActor>,
+        agent_memory_prompt_template: String,
+    ) -> Result<Self> {
+        let graph = Graph::new(uri, user, pass)
+            .await
+            .map_err(|e| anyhow::anyhow!("Neo4j 连接失败: {}", e))?;
+
+        let mut actor = Self {
+            graph,
+            open_aiproxy_actor,
+            config: ChatAgentConfig::default(),
+            ai_name: "Assistant".to_string(),
+            agent_memory_prompt_template,
+        };
+
+        // 1. 基础连接校验
+        actor.graph.run(query("RETURN 1")).await?;
+
+        // 2. 核心步骤：从人格设定文件中自动“提取本我”并同步到 Neo4j
+        actor.init_self_identity().await?;
+
+        Ok(actor)
+    }
+
+    /// 【本我提取逻辑】读取 MD 文件并让 AI 解析
+    async fn init_self_identity(&mut self) -> Result<()> {
+        let raw_personality = self.load_personality_file().await;
+
+        let extract_prompt = format!(
+            "你是一个身份分析专家。请阅读以下【人格设定文本】，提取出该角色的‘本我’信息。
+            要求仅输出 JSON：
+            {{
+                \"name\": \"名字\",
+                \"role\": \"角色定位\",
+                \"traits\": [\"标签1\", \"标签2\"],
+                \"core_goal\": \"核心目标\"
+            }}
+            文本内容：\n{}",
+            raw_personality
+        );
+
+        info!("正在通过 AI 代理从人格设定中提取“本我”特征...");
+
+        if let Ok(Ok(json_res)) = self
+            .open_aiproxy_actor
+            .send(CallOpenAI {
+                prompt: extract_prompt,
+            })
+            .await
+        {
+            let cleaned_json = clean_json_string(&json_res);
+
+            if let Ok(id) = serde_json::from_str::<AssistantIdentity>(cleaned_json) {
+                self.ai_name = id.name.clone();
+                info!("✨ 成功识别本我身份: {} ({})", self.ai_name, id.role);
+
+                // 同步到 Neo4j
+                let sync_q = "
+                    MERGE (a:Assistant {name: $name})
+                    SET a.role = $role, 
+                        a.traits = $traits, 
+                        a.core_goal = $goal, 
+                        a.is_self = true,
+                        a.last_sync = timestamp()
+                ";
+                self.graph
+                    .run(
+                        query(sync_q)
+                            .param("name", id.name)
+                            .param("role", id.role)
+                            .param("traits", id.traits)
+                            .param("goal", id.core_goal),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn load_personality_file(&self) -> String {
+        let path = self.config.personality_path.clone();
+        tokio::task::spawn_blocking(move || {
+            std::fs::read_to_string(&path).unwrap_or_else(|_| "你是一个智能助手".to_string())
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// 【查】获取用户的结构化记忆摘要
+    async fn get_user_facts(&self, user_name: &str) -> Result<String> {
+        let search_q = "
+            MATCH (u {name: $u_name})-[r]->(o:Concept)
+            WHERE type(r) <> 'INTERACTED_WITH'
+            RETURN type(r) as rel, o.name as target
+            LIMIT 20
+        ";
+        let mut result = self
+            .graph
+            .execute(query(search_q).param("u_name", user_name))
+            .await?;
+        let mut facts = Vec::new();
+
+        while let Some(row) = result.next().await? {
+            let rel: String = row.get("rel")?;
+            let target: String = row.get("target")?;
+            facts.push(format!("({}-{}-{})", user_name, rel, target));
+        }
+
+        Ok(if facts.is_empty() {
+            "暂无已知事实".to_string()
+        } else {
+            facts.join(", ")
+        })
+    }
+
+    /// 【增/改】存储或更新一个三元组事实
+    async fn upsert_fact(&self, sub: &str, rel: &str, obj: &str) -> Result<()> {
+        // 使用反引号包裹关系名以支持中文
+        let cypher = format!(
+            "MERGE (s {{name: $sub}}) 
+             MERGE (o:Concept {{name: $obj}}) 
+             MERGE (s)-[r:`{}`]->(o) 
+             SET r.updated_at = timestamp()",
+            rel
+        );
+        let q = query(&cypher).param("sub", sub).param("obj", obj);
+        self.graph.run(q).await.map_err(|e| anyhow::anyhow!(e))
+    }
+
+    /// 【删】删除特定的关系
+    async fn delete_fact(&self, sub: &str, rel: &str, obj: &str) -> Result<()> {
+        let cypher = format!(
+            "MATCH (s {{name: $sub}})-[r:`{}`]->(o {{name: $obj}}) DELETE r",
+            rel
+        );
+        self.graph
+            .run(query(&cypher).param("sub", sub).param("obj", obj))
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    // 删除节点及其所有关系
+    async fn delete_node(&self, node_name: &str) -> Result<()> {
+        Ok(())
+    }
+    /// 解析 AI 返回的 JSON 并批量应用到 Neo4j
+    async fn apply_batch_update(graph: Graph, ai_json: &str) -> anyhow::Result<()> {
+        // 1. 清洗并解析 JSON
+        let cleaned = crate::utils::json_util::clean_json_string(ai_json);
+        let update: MemoryUpdate = serde_json::from_str(cleaned)
+            .map_err(|e| anyhow::anyhow!("JSON解析失败: {}, 内容: {}", e, cleaned))?;
+
+        // 2. 批量执行指令
+        for cmd in update.graph {
+            if cmd.relation.trim().is_empty() {
+                continue;
+            }
+
+            let cypher = match cmd.action.to_uppercase().as_str() {
+                // UPSERT: 存在则更新时间戳，不存在则创建全链路
+                "UPSERT" => format!(
+                    "MERGE (s {{name: $sub}}) 
+                     MERGE (o:Concept {{name: $obj}}) 
+                     MERGE (s)-[r:`{}`]->(o) 
+                     SET r.updated_at = timestamp()",
+                    cmd.relation // 关系名动态嵌入，反引号支持中文
+                ),
+                // DELETE: 仅删除关系线，保留节点
+                "DELETE" => format!(
+                    "MATCH (s {{name: $sub}})-[r:`{}`]->(o:Concept {{name: $obj}}) 
+                     DELETE r",
+                    cmd.relation
+                ),
+                _ => continue,
+            };
+
+            // 3. 执行参数化查询
+            let q = neo4rs::query(&cypher)
+                .param("sub", cmd.subject.as_str())
+                .param("obj", cmd.object.as_str());
+
+            if let Err(e) = graph.run(q).await {
+                error!(
+                    "❌ 记忆指令执行失败: {} | 事实: ({}, {}, {})",
+                    e, cmd.subject, cmd.relation, cmd.object
+                );
+            } else {
+                debug!(
+                    "✅ 记忆指令执行成功: [{}] ({} - {} -> {})",
+                    cmd.action, cmd.subject, cmd.relation, cmd.object
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Actor for AgentMemoryHActor {
+    type Context = Context<Self>;
+    fn started(&mut self, _ctx: &mut Self::Context) {
+        info!("🧠 记忆智能体启动成功，当前操作标识: {}", self.ai_name);
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FactCommand {
+    pub action: String, // "UPSERT" 或 "DELETE"
+    pub subject: String,
+    pub relation: String,
+    pub object: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+pub struct MemoryUpdate {
+    pub graph: Vec<FactCommand>,
+}
+
+// --- 核心业务 Handler ---
 impl Handler<RequestMemory> for AgentMemoryHActor {
     type Result = ResponseActFuture<Self, Result<String, ChatAgentError>>;
 
@@ -89,84 +276,66 @@ impl Handler<RequestMemory> for AgentMemoryHActor {
         let openai = self.open_aiproxy_actor.clone();
         let user_name = msg.user_name.clone();
         let user_content = msg.message_content.clone();
+        let ai_name = self.ai_name.clone();
+        let memory_prompt = self.agent_memory_prompt_template.clone();
 
         Box::pin(
             async move {
-                debug!("开始为用户 {} 检索/更新认知...", user_name);
 
-                // 1. 【感知与初始化】 确保用户节点存在 (无则创建，有则更新活跃时间)
-                let init_q = "
-                    MERGE (u:User {name: $name})
-                    ON CREATE SET u.created_at = timestamp(), u.first_interaction = $content
-                    ON MATCH SET u.last_seen = timestamp()
-                    RETURN u
-                ";
-                debug!("执行初始化语句: {}", init_q);
-                graph.run(query(init_q).param("name", user_name.clone()).param("content", user_content.clone())).await
-                    .map_err(|e| ChatAgentError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
-
-                // 2. 【脑内检索】 获取当前用户的所有相关背景（标签、属性、关联实体）
+                // 结构化背景检索 ---
                 let search_q = "
-                    MATCH (u:User {name: $name})
-                    OPTIONAL MATCH (u)-[r]->(n)
-                    RETURN labels(n) as tags, n.name as entity_name, type(r) as relationship, n.content as fact
-                    LIMIT 10
-                ";
-                debug!("执行检索语句: {}", search_q);
-                let mut result = graph.execute(query(search_q).param("name", user_name.clone())).await
-                    .map_err(|e| ChatAgentError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+                MATCH (u:User {name: $u_name})
+                OPTIONAL MATCH (u)-[r]->(o:Concept)
+                RETURN collect(DISTINCT {rel: type(r), target: o.name}) as facts
+                LIMIT 20
+            ";
+                let mut result = graph
+                    .execute(query(search_q).param("u_name", user_name.clone()))
+                    .await?;
+                let mut knowledge_summary = String::from("暂无已知持久性事实");
 
-                let mut current_knowledge = Vec::new();
-                while let Some(row) = result.next().await.unwrap_or(None) {
-                    let entity: Option<String> = row.get("entity_name").ok();
-                    let rel: Option<String> = row.get("relationship").ok();
-                    if let (Some(e), Some(r)) = (entity, rel) {
-                        current_knowledge.push(format!("(用户)-[{}]->({})", r, e));
+                if let Some(row) = result.next().await? {
+                    let facts: Vec<serde_json::Value> = row.get("facts").unwrap_or_default();
+
+                    let fact_strings: Vec<String> = facts
+                        .iter()
+                        .filter_map(|f| {
+                            let rel = f["rel"].as_str()?;
+                            let target = f["target"].as_str()?;
+                            // 拼写成你要求的 (banchen-KNOWS-rust) 格式
+                            Some(format!("({}-{}-{})", user_name, rel, target))
+                        })
+                        .collect();
+
+                    if !fact_strings.is_empty() {
+                        knowledge_summary = fact_strings.join(", ");
                     }
                 }
-                
-                debug!("当前认知: {:#?}", current_knowledge);
-                let knowledge_str = if current_knowledge.is_empty() { 
-                    "目前对他一无所知".to_string() 
-                } else { 
-                    current_knowledge.join(", ") 
-                };
 
-                // 3. 【认知决策】 调用 OpenAI 判定是否需要“学习”新内容
-                let memory_prompt = format!(
-                    "你是一个记忆管理员。
-                    【当前认知】: 用户名为 '{}'，已知关系: {}。
-                    【当前输入】: '{}'。
-                    请分析输入，如果发现了新的实体（人名、项目、偏好、习惯、技能），请生成对应的 Cypher MERGE 语句。
-                    如果是已有信息的修改，生成 SET 语句。
-                    
-                    输出格式要求 (JSON):
-                    {{
-                        \"commands\": [
-                            \"MATCH (u:User {{name: '...'}}) MERGE (u)-[:WORKS_ON]->(p:Project {{name: '...'}})\",
-                            \"MATCH (u:User {{name: '...'}}) SET u.hobby = '...'\"
-                        ]
-                    }}
-                    如果无需更新，请保持 commands 为空数组。只输出 JSON。",
-                    user_name, knowledge_str, user_content
-                );
+                let new_memory_prompt = memory_prompt
+                    .replace("{ai_name}", &format!("{}", ai_name))
+                    .replace("{user_name}", &format!("{}", user_name))
+                    .replace("{knowledge_summary}", &format!("{}", knowledge_summary))
+                    .replace("{user_content}", &format!("{}", user_content));
 
-                debug!("预览反思:{}", memory_prompt);
-                if let Ok(Ok(ai_thought)) = openai.send(CallOpenAI { prompt: memory_prompt }).await {
-                    // 自主执行 AI 的决策（持久化到 Neo4j）
-                    let _ = Self::persist_ai_thoughts(graph.into(), ai_thought).await;
+                // 发送反思请求
+                if let Ok(Ok(ai_response)) = openai
+                    .send(CallOpenAI {
+                        prompt: new_memory_prompt,
+                    })
+                    .await
+                {
+                    tokio::spawn(async move {
+                        if let Err(e) = Self::apply_batch_update(graph, &ai_response).await {
+                            warn!("记忆批量更新任务失败: {}", e);
+                        }
+                    });
                 }
 
-                // 4.  再次整合最新背景回传给 ChatAgent
-                let final_context = format!(
-                    "【关于 {} 的记忆背景】: {} \n【当前输入分析】: 用户提到了 '{}'，记忆已同步。",
-                    user_name, knowledge_str, user_content
-                );
-
-                Ok(final_context) 
+                // 4. 返回背景
+                Ok(format!(" {}\n", knowledge_summary))
             }
             .into_actor(self),
         )
     }
 }
-

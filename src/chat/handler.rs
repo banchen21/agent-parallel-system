@@ -4,11 +4,13 @@ use crate::ChannelManagerActor;
 use crate::chat::actor_messages::{GetMessages, SaveMessage};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::{MessageContent, MessageType};
+use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
 use actix::Addr;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, get, post, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ops::Add;
 use tracing::{debug, error, info, warn};
 
 // 请求结构体
@@ -25,6 +27,7 @@ pub async fn handle_message(
     chat_request: web::Json<ChatRequest>,
     chat_agent: web::Data<Addr<ChatAgent>>,
     channel_manager: web::Data<Addr<ChannelManagerActor>>,
+    memory_manager: web::Data<Addr<AgentMemoryHActor>>,
     req: HttpRequest,
 ) -> ActixResult<HttpResponse> {
     let start_time = std::time::Instant::now();
@@ -67,10 +70,7 @@ pub async fn handle_message(
     match channel_manager.send(save_message).await {
         Ok(result) => match result {
             Ok(_) => {
-                debug!(
-                    "消息保存到数据库成功，耗时: {:?}",
-                    db_save_start.elapsed()
-                );
+                debug!("消息保存到数据库成功，耗时: {:?}", db_save_start.elapsed());
             }
             Err(e) => {
                 warn!(
@@ -92,10 +92,16 @@ pub async fn handle_message(
             content: user_message.clone(),
         })
         .await;
-    let agent_duration = agent_start.elapsed();
     // 处理 ChatAgent 的响应
     match chat_agent_response {
         Ok(Ok(agent_response)) => {
+            // 将ai响应丢给memory
+            let _ = memory_manager
+                .send(RequestMemory {
+                    user_name: agent_response.content.user.clone(),
+                    message_content: agent_response.content.content.to_string()
+                })
+                .await;
             let response_save_start = std::time::Instant::now();
             let save_response_message = SaveMessage {
                 message: agent_response.content.clone(),
@@ -162,6 +168,7 @@ pub async fn get_message_history(
     let result = channel_manager
         .send(GetMessages {
             user: username, // 使用中间件解析出的用户名
+
             before: query.before,
             limit: query.limit.unwrap_or(20),
         })

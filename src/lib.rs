@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
 use tracing::{error, info};
 
-
 /// 从数据库URL中提取数据库名称
 fn extract_database_name(database_url: &str) -> Result<String> {
     let url_parts: Vec<&str> = database_url.split('/').collect();
