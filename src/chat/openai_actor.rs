@@ -30,9 +30,9 @@ pub enum ChatAgentError {
     JoinError(#[from] tokio::task::JoinError),
 
     #[error("逻辑错误: {0}")]
-    LogicError(String), 
+    LogicError(String),
 
-     #[error("内部逻辑错误: {0}")]
+    #[error("内部逻辑错误: {0}")]
     InternalError(String),
 
     // 查询错误
@@ -88,12 +88,13 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
             let mut retries = 0;
             loop {
                 // 构造请求
-                let request_res = async_openai::types::chat::CreateChatCompletionRequestArgs::default()
-                    .model(&model)
-                    .max_tokens(max_tokens)
-                    .messages(prompt.clone())
-                    .build()
-                    .map_err(ChatAgentError::from);
+                let request_res =
+                    async_openai::types::chat::CreateChatCompletionRequestArgs::default()
+                        .model(&model)
+                        .max_tokens(max_tokens)
+                        .messages(prompt.clone())
+                        .build()
+                        .map_err(ChatAgentError::from);
 
                 let request = match request_res {
                     Ok(r) => r,

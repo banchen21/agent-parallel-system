@@ -1,6 +1,6 @@
 use actix::prelude::*;
 use std::collections::{HashMap, HashSet};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{info, warn};
 
 // ==========================================
@@ -114,7 +114,9 @@ impl Handler<SubmitDag> for DagOrchestrator {
             self.tasks.insert(task.id.clone(), task.clone());
             self.status.insert(task.id.clone(), TaskStatus::Pending);
             self.indegree.insert(task.id.clone(), task.depends_on.len());
-            self.downstream.entry(task.id.clone()).or_insert_with(Vec::new);
+            self.downstream
+                .entry(task.id.clone())
+                .or_insert_with(Vec::new);
         }
 
         // 2. 构建邻接表 (Downstream)
@@ -172,7 +174,7 @@ impl Handler<TaskCompleted> for DagOrchestrator {
                 // 3. 将下游任务的入度减 1
                 if let Some(degree) = self.indegree.get_mut(&next_task) {
                     *degree -= 1;
-                    
+
                     // 4. 如果入度降为 0，说明它的所有前置任务都已完成，立即启动它！
                     if *degree == 0 {
                         info!("🔓 任务 [{}] 的前置依赖已全部满足，准备触发...", next_task);

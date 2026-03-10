@@ -45,23 +45,11 @@ impl Settings {
 
         let s = Config::builder()
             // 默认值
-            .set_default(
-                "chat_agent.prompt",
-                r#""#,
-            )?
-            .set_default(
-                "memory_agent.prompt_query",
-                r#""#,
-            )?
-             .set_default(
-                "memory_agent.prompt_summary",
-                r#""#,
-            )?
+            .set_default("chat_agent.prompt", r#""#)?
+            .set_default("memory_agent.prompt_query", r#""#)?
+            .set_default("memory_agent.prompt_summary", r#""#)?
             // 从配置文件加载
-            .set_default(
-                "task_agent.prompt",
-                r#""#,
-            )?
+            .set_default("task_agent.prompt", r#""#)?
             .add_source(File::with_name(default_config_path).required(true))
             // 从.env文件加载
             .add_source(

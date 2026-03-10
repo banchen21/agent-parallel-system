@@ -2,7 +2,8 @@ use actix::prelude::*;
 use anyhow::Result;
 use async_openai::types::chat::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
+    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestUserMessageContent,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -95,7 +96,8 @@ impl Handler<OtherMessage> for TaskAgent {
             let user_content: MessageContent = msg.user_content;
 
             // 提示词构建
-            let prompt = this.build_prompt(&long_term_memory, short_term_memory, user_content.clone());
+            let prompt =
+                this.build_prompt(&long_term_memory, short_term_memory, user_content.clone());
 
             // 4. 发送请求
             let response_text = this

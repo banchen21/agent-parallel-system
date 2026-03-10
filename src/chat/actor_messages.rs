@@ -107,7 +107,6 @@ pub struct HistoryQuery {
     pub before: Option<chrono::DateTime<chrono::Utc>>, // 分页游标
 }
 
-
 // 返回的消息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultMessage {
@@ -118,12 +117,11 @@ pub struct ResultMessage {
     pub created_at: DateTime<Utc>,
 }
 
-
 #[derive(Message)]
 #[rtype(result = "Result<Vec<ResultMessage>>")]
 pub struct GetMessages {
     pub user: String,
-    pub ai_name:String,
+    pub ai_name: String,
     pub before: Option<chrono::DateTime<chrono::Utc>>,
     pub limit: i64,
 }

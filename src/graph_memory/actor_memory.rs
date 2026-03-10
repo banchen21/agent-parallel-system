@@ -468,14 +468,14 @@ impl Handler<RequestMemory> for AgentMemoryHActor {
                     .await
                     .map_err(ChatAgentError::from)??;
 
-                let entity_container: EntityContainer =match serde_json::from_str(&clean_json_string(&response_text)) {
-                    Ok(res) => res,
-                    Err(e) => 
-                    {
-                        error!("反序列化失败：{}", e);
-                        return Err(ChatAgentError::QueryError(e.to_string()));
-                    },
-                };
+                let entity_container: EntityContainer =
+                    match serde_json::from_str(&clean_json_string(&response_text)) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            error!("反序列化失败：{}", e);
+                            return Err(ChatAgentError::QueryError(e.to_string()));
+                        }
+                    };
 
                 // 所有需要查询的实体
                 let mut entity_list = vec![];

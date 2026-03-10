@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
         .await?;
     info!("PostgreSQL 连接成功");
 
-    let config=CONFIG.clone();
+    let config = CONFIG.clone();
 
     // neo4j 图数据库+智能记忆管理体
     let agent_memory_prompt = config.memory_agent;

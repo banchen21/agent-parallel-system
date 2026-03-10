@@ -1,7 +1,7 @@
-use serde::Serialize;
-use sysinfo::{System, Networks, Disks};
 use actix::prelude::*;
+use serde::Serialize;
 use std::time::{Duration, Instant};
+use sysinfo::{Disks, Networks, System};
 
 #[derive(Serialize, Clone, Debug)]
 pub struct SystemStats {
@@ -29,11 +29,11 @@ impl SysMonitorActor {
     pub fn new() -> Self {
         let networks = Networks::new_with_refreshed_list();
         let disks = Disks::new_with_refreshed_list();
-        
+
         // 初始化累加值
         let received = networks.iter().map(|(_, n)| n.received()).sum();
         let transmitted = networks.iter().map(|(_, n)| n.transmitted()).sum();
-        
+
         Self {
             sys: System::new_all(),
             networks,
@@ -59,7 +59,7 @@ impl Handler<GetStats> for SysMonitorActor {
     fn handle(&mut self, _: GetStats, _: &mut Self::Context) -> Self::Result {
         let now = Instant::now();
         let duration = now.duration_since(self.last_check).as_secs_f64();
-        
+
         // 刷新所有数据
         self.sys.refresh_cpu_usage();
         self.sys.refresh_memory();
@@ -68,7 +68,11 @@ impl Handler<GetStats> for SysMonitorActor {
 
         // 计算当前累计流量
         let current_rx = self.networks.iter().map(|(_, n)| n.received()).sum::<u64>();
-        let current_tx = self.networks.iter().map(|(_, n)| n.transmitted()).sum::<u64>();
+        let current_tx = self
+            .networks
+            .iter()
+            .map(|(_, n)| n.transmitted())
+            .sum::<u64>();
 
         // 计算瞬时速度 (Bytes per second)
         // 使用 saturating_sub 防止网卡重启导致计数器归零造成的溢出
@@ -82,7 +86,11 @@ impl Handler<GetStats> for SysMonitorActor {
 
         // 计算磁盘占用
         let total_disk = self.disks.iter().map(|d| d.total_space()).sum();
-        let used_disk = self.disks.iter().map(|d| d.total_space() - d.available_space()).sum();
+        let used_disk = self
+            .disks
+            .iter()
+            .map(|d| d.total_space() - d.available_space())
+            .sum();
 
         let stats = SystemStats {
             cpu_usage: self.sys.global_cpu_usage(),
@@ -93,7 +101,7 @@ impl Handler<GetStats> for SysMonitorActor {
             net_rx_speed: rx_speed,
             net_tx_speed: tx_speed,
         };
-        
+
         MessageResult(stats)
     }
 }

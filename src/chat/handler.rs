@@ -167,7 +167,7 @@ pub async fn handle_message(
                     "content": chat_message.content,
                     "created_at":chat_message.created_at,
                 }));
-            };
+            }
             Ok(HttpResponse::Ok().json(message_list))
         }
         Ok(Err(e)) => {

@@ -42,15 +42,9 @@ impl MessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
-    Text { 
-        text: String 
-    },
-    ImageUrl { 
-        image_url: ImageUrl 
-    },
-    InputAudio { 
-        input_audio: InputAudio 
-    },
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+    InputAudio { input_audio: InputAudio },
 }
 
 // 3. 具体的图片结构
