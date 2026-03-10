@@ -27,9 +27,13 @@ use crate::channel::actor_database::DatabaseManager;
 use crate::chat::actor_messages::ChannelManagerActor;
 use crate::chat::chat_agent::ChatAgent;
 use crate::chat::openai_actor::OpenAIProxyActor;
+use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
+use crate::core::handler::get_stats_handler;
 use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
 use crate::lib::ensure_database_exists;
+use crate::task_handler::task_agent::TaskAgent;
+use crate::utils::env_util::env_var_or_default;
 use actix::Actor;
 mod api;
 mod lib;
@@ -49,23 +53,22 @@ async fn main() -> Result<()> {
 
     info!("正在启动 Agent Parallel System (Actix架构)...");
 
-    // Agent并行处理层
-    let mut open_aiconfig = OpenAIConfig::default();
+    // 系统监控
+    let sys_monitor_actor = SysMonitorActor::new().start();
+
+    // OpenAi 并行处理层
+    let mut openai_config = OpenAIConfig::default();
     let api_base = std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "null".to_string());
-    open_aiconfig = open_aiconfig.with_api_base(api_base);
+    openai_config = openai_config.with_api_base(api_base);
     let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "null".to_string());
-    open_aiconfig = open_aiconfig.with_api_key(api_key);
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-3.5-turbo".to_string());
-    let timeout_secs: u64 = std::env::var("OPENAI_TIMEOUT_SECONDS")
-        .ok() // 变成 Option
-        .and_then(|s| s.parse().ok()) // 尝试解析成数字
-        .unwrap_or(60); // 如果变量不存在或解析失败，使用默认值 60
-    let max_tokens: u32 = std::env::var("OPENAI_MAX_TOKENS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2048); // 默认值 2048
+    openai_config = openai_config.with_api_key(api_key);
+
+    let model = env_var_or_default("OPENAI_MODEL", "gpt-3.5-turbo".to_string());
+    let timeout_secs = env_var_or_default("OPENAI_TIMEOUT_SECONDS", 60u64);
+    let max_tokens = env_var_or_default("OPENAI_MAX_TOKENS", 2048u32);
+
     let open_aiproxy_actor =
-        OpenAIProxyActor::new(open_aiconfig, model, timeout_secs, max_tokens).start();
+        OpenAIProxyActor::new(openai_config, model, timeout_secs, max_tokens).start();
 
     // postgresql
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -81,17 +84,20 @@ async fn main() -> Result<()> {
         .await?;
     info!("PostgreSQL 连接成功");
 
-    // neo4j 图数据库+智能记忆管理
-    let agent_memory_prompt_template = CONFIG.memory_agent.prompt_template.clone();
-    let neo4j_uri = env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
-    let neo4j_user = env::var("NEO4J_USERNAME").unwrap_or_else(|_| "neo4j".to_string());
-    let neo4j_pass = env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j".to_string());
+    let config=CONFIG.clone();
+
+    // neo4j 图数据库+智能记忆管理体
+    let agent_memory_prompt = config.memory_agent;
+    let neo4j_uri = env_var_or_default("NEO4J_URI", "127.0.0.1:7687".to_string());
+    let neo4j_user = env_var_or_default("NEO4J_USERNAME", "neo4j".to_string());
+    let neo4j_pass = env_var_or_default("NEO4J_PASSWORD", "neo4j".to_string());
+
     let agent_memory_hactor = AgentMemoryHActor::new(
         &neo4j_uri,
         &neo4j_user,
         &neo4j_pass,
         open_aiproxy_actor.clone(),
-        agent_memory_prompt_template
+        agent_memory_prompt,
     )
     .await
     .expect("无法连接到 Neo4j");
@@ -114,13 +120,18 @@ async fn main() -> Result<()> {
     // 用户管理器Actor
     let user_manager = crate::api::user::actor_user::UserManagerActor::new(pool.clone()).start();
 
+    // 初始化任务Agent
+    let task_agent_prompt = config.task_agent.prompt;
+    let task_agent = TaskAgent::new(open_aiproxy_actor.clone(), task_agent_prompt).start();
+
     // 初始化聊天agent
-    let prompt_template = CONFIG.chat_agent.prompt_template.clone();
+    let chat_agent_prompt = config.chat_agent.prompt;
     let chat_agent = ChatAgent::new(
         channel_manager.clone(),
         agent_memory_hactor_addr.clone(),
-        open_aiproxy_actor,
-        prompt_template,
+        open_aiproxy_actor.clone(),
+        task_agent.clone(),
+        chat_agent_prompt,
     )
     .start();
 
@@ -162,6 +173,7 @@ async fn main() -> Result<()> {
             .app_data(web::Data::new(user_manager.clone()))
             .app_data(web::Data::new(redis_addr.clone()))
             .app_data(web::Data::new(chat_agent.clone()))
+            .app_data(web::Data::new(sys_monitor_actor.clone()))
             .configure(configure_api_routes)
     })
     .bind(("0.0.0.0", 8000))?
@@ -189,7 +201,9 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/v1")
             .wrap(Auth) // 只对 /api/v1 下的路由生效
-            // 你要求的：过期前刷新，所以放这里
+            // 系统资源监控
+            .service(get_stats_handler)
+            // 聊天相关接口
             .service(chat::handler::handle_message)
             .service(chat::handler::get_message_history),
     );

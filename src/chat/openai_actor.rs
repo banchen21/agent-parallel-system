@@ -1,6 +1,7 @@
 use actix::prelude::*;
 use async_openai::Client;
 use async_openai::config::OpenAIConfig;
+use async_openai::types::chat::ChatCompletionRequestMessage;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
@@ -27,6 +28,16 @@ pub enum ChatAgentError {
 
     #[error("任务加入失败: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+
+    #[error("逻辑错误: {0}")]
+    LogicError(String), 
+
+     #[error("内部逻辑错误: {0}")]
+    InternalError(String),
+
+    // 查询错误
+    #[error("查询错误: {0}")]
+    QueryError(String),
 }
 
 pub struct OpenAIProxyActor {
@@ -56,7 +67,7 @@ impl Actor for OpenAIProxyActor {
 #[derive(Message)]
 #[rtype(result = "Result<String, ChatAgentError>")]
 pub struct CallOpenAI {
-    pub prompt: String,
+    pub chat_completion_request_message: Vec<ChatCompletionRequestMessage>,
 }
 
 impl Handler<CallOpenAI> for OpenAIProxyActor {
@@ -70,7 +81,7 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
         let max_tokens = self.max_tokens;
         let timeout_secs = self.timeout_secs;
         let max_retries = self.max_retries;
-        let prompt = msg.prompt;
+        let prompt = msg.chat_completion_request_message;
 
         // 2. 显式标注异步块的返回类型，解决 {unknown} 问题
         let fut = async move {
@@ -80,13 +91,7 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
                 let request_res = async_openai::types::chat::CreateChatCompletionRequestArgs::default()
                     .model(&model)
                     .max_tokens(max_tokens)
-                    .messages([
-                        async_openai::types::chat::ChatCompletionRequestUserMessageArgs::default()
-                            .content(prompt.clone())
-                            .build()
-                            .map_err(ChatAgentError::from)? // 显式转换错误
-                            .into(),
-                    ])
+                    .messages(prompt.clone())
                     .build()
                     .map_err(ChatAgentError::from);
 

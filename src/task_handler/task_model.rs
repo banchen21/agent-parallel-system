@@ -10,14 +10,6 @@ pub struct MessageClassificationResponse {
     #[serde(rename = "is_task")]
     pub is_task: bool,
 
-    /// 置信度分数 (0.0 - 1.0)
-    #[serde(rename = "confidence")]
-    pub confidence: f32,
-
-    /// 消息内容
-    #[serde(rename = "content")]
-    pub content: String,
-
     /// 分类原因
     #[serde(rename = "reason")]
     pub reason: Option<String>,
@@ -95,16 +87,9 @@ impl MessageClassificationResponse {
     ) -> Self {
         Self {
             is_task,
-            confidence,
-            content,
             reason: Some(reason),
             tasks,
         }
-    }
-
-    /// 检查是否为有效分类（置信度阈值检查）
-    pub fn is_valid(&self, confidence_threshold: f32) -> bool {
-        self.confidence >= confidence_threshold
     }
 
     /// 获取任务数量
@@ -132,8 +117,6 @@ impl Default for MessageClassificationResponse {
     fn default() -> Self {
         Self {
             is_task: false,
-            confidence: 0.0,
-            content: String::new(),
             reason: None,
             tasks: None,
         }

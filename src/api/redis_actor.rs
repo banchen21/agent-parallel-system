@@ -85,7 +85,6 @@ impl Handler<VerifyAndConsumeToken> for RedisActor {
             // 2. 如果存在，立即删除（确保 Token 只能使用一次，即 Token Rotation）
             if username.is_some() {
                 let _: () = conn.del(&key).await?;
-                debug!("Redis: 已消耗 Token，Key: {}", key);
             }
 
             Ok(username)

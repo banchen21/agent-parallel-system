@@ -12,16 +12,23 @@ pub struct Settings {
     pub app_url: String,
     pub chat_agent: ChatAgentConfig,
     pub memory_agent: MemoryAgentConfig,
+    pub task_agent: TaskAgentConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatAgentConfig {
-    pub prompt_template: String,
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MemoryAgentConfig {
-    pub prompt_template: String,
+    pub prompt_query: String,
+    pub prompt_summary: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskAgentConfig {
+    pub prompt: String,
 }
 
 impl Settings {
@@ -39,18 +46,22 @@ impl Settings {
         let s = Config::builder()
             // 默认值
             .set_default(
-                "chat_agent.prompt_template",
-                r#"用户消息内容：{context:""}
-请严格按照json回复。
-以下是json格式:{context:""}"#,
+                "chat_agent.prompt",
+                r#""#,
             )?
             .set_default(
-                "memory_agent.prompt_template",
-                r#"用户消息内容：{context:""}
-请严格按照json回复。
-以下是json格式:{context:""}"#,
+                "memory_agent.prompt_query",
+                r#""#,
+            )?
+             .set_default(
+                "memory_agent.prompt_summary",
+                r#""#,
             )?
             // 从配置文件加载
+            .set_default(
+                "task_agent.prompt",
+                r#""#,
+            )?
             .add_source(File::with_name(default_config_path).required(true))
             // 从.env文件加载
             .add_source(
@@ -75,7 +86,8 @@ impl Settings {
             }
 
             // 创建默认配置内容
-            let default_content = r#"# 默认配置文件
+            let default_content = r#"
+            # 默认配置文件
 # 应用程序基本配置
 app_name = "Agent Parallel System"
 environment = "development"
@@ -83,9 +95,80 @@ app_url = "http://0.0.0.0:8000"
 
 # 聊天代理配置
 [chat_agent]
-prompt_template = """用户消息内容：{context:""}
-请严格按照json回复。
-以下是json格式:{context:""}"""
+prompt_template = """你是一个高精度的意图识别并能处理任务的专家。请分析用户的消息内容，判断其是否属于一个“任务(Task)”。
+
+【定义标准】
+- 任务 (Task): 包含明确的指令、需要执行的操作、请求编写代码、分析数据、翻译、创作长文本或复杂的逻辑推理、具体执行任务。
+- 非任务 (Chat): 简单的问候（你好）、无意义的闲聊、表达情绪（哈哈）、简单的常识问答或无需特殊处理的陈述。
+- 非任务回复 (Chat):  根据人格设定以及记忆内容，正常回复用户消息，无需执行任何任务。
+
+【长期记忆】
+{memory_content}
+
+【短期记忆】
+{momory_content_short}
+
+【用户内容】
+{user_input}
+
+
+【约束条件】
+1. 必须严格按照下方的 JSON 格式回复。
+2. 不得包含任何解释、前导词或后缀。
+3. 确保输出可以被程序直接解析。
+
+【输出格式】
+{
+    "is_task": boolean,
+    "confidence": float,
+    "content": "如{is_task}=true则表示正在处理同时根据【回复句式方面】进行回复,",
+    "reason": "总任务标题",
+    "tasks": [
+        {
+            "task_id": "唯一标识符",
+            "task": "任务1的标题",
+            "task_description": "任务1的详细描述",
+        },{
+            "task_id": "唯一标识符",
+            "task": "任务2的标题",
+            "task_description": "任务2的详细描述",
+        }
+    ]否则为null
+}
+"""
+
+# 智能记忆代理配置
+[memory_agent]
+prompt_template = """你的任务是从对话中提取【持久性事实】，并以结构化形式输出。
+
+**【节点与关系】**
+- **Assistant节点**：代表你，使用名称例如 '齐悦'或者'banchen'等。
+- **实体节点**：代表其他实体'。
+- **关系**：用以连接Assistant节点与实体节点。
+
+**【关系类型】**：如 `喜欢`, `讨厌`, `掌握`, `职业是`等。
+
+**【提取规则】**
+1. 仅提取长期事实（兴趣、身份、技能、项目、性格等）。
+2. 忽略瞬时信息（打招呼、情绪、闲聊等无关长期事实消息）。
+3. 主体必须是 '{ai_name}' 或 '{user_name}等具体的实体对象'。
+4. 无事实时返回空列表。
+
+**【本地记忆】**
+{knowledge_summary}
+
+**【{user_name}的内容】**
+{user_content}
+
+【输出格式】
+{
+    "graph":[
+    {{ "action": "UPSERT", "subject": "...", "relation": "...", "object": "..." }},
+    {{ "action": "DELETE", "subject": "...", "relation": "...", "object": "..." }}
+  ]
+}
+
+"""
 "#;
 
             fs::write(config_path, default_content)

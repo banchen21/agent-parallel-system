@@ -24,8 +24,8 @@ impl DatabaseManager {
                 id SERIAL PRIMARY KEY,
                 "user" TEXT NOT NULL,
                 source_ip TEXT NOT NULL,
+                device_type TEXT NOT NULL,
                 content TEXT NOT NULL,
-                metadata JSONB,
                 created_at TIMESTAMPTZ NOT NULL
             );
             "#,
