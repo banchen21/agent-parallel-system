@@ -1,17 +1,15 @@
 // HTTP 处理函数
 use super::model::UserMessage;
 use crate::ChannelManagerActor;
-use crate::chat::actor_messages::{GetMessages, ResultMessage, SaveMessage};
+use crate::chat::actor_messages::{GetMessages, SaveMessage};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::MessageContent;
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, GetMyName, RequestMemory};
+use crate::graph_memory::actor_memory::{AgentMemoryHActor, GetMyName};
 use actix::Addr;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, get, post, web};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::ops::Add;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 // 请求结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,52 +67,10 @@ pub async fn handle_message(
 
     match chat_agent_response {
         Ok(Ok(agent_response)) => {
-            let channel_manager_clone = channel_manager.get_ref().clone();
-            let agent_memory_clone = agent_memory_hactor.get_ref().clone();
-            let sender_name = user_message.sender.clone();
-            let ai_name_clone = ai_name.clone();
-            let agent_content_debug = format!("{:?}", agent_response.content);
-            tokio::spawn(async move {
-                debug!("开始异步处理记忆反思...");
-                let memory_content_short: Vec<ResultMessage> = match channel_manager_clone
-                    .send(GetMessages {
-                        user: sender_name,
-                        ai_name: ai_name_clone.clone(),
-                        before: None,
-                        limit: 20,
-                    })
-                    .await
-                {
-                    Ok(Ok(msgs)) => msgs,
-                    Ok(Err(e)) => {
-                        error!("❌ 异步获取消息历史失败: {}", e);
-                        vec![]
-                    }
-                    Err(e) => {
-                        error!("❌ 异步获取消息历史通信错误: {}", e);
-                        vec![]
-                    }
-                };
-
-                let mem_request = RequestMemory {
-                    user_name: ai_name_clone,
-                    momory_content_short: memory_content_short,
-                    message_content: MessageContent::Text(agent_content_debug),
-                };
-
-                if let Err(e) = agent_memory_clone.send(mem_request).await {
-                    error!("❌ 异步发送 RequestMemory 失败: {}", e);
-                } else {
-                    debug!("✅ 异步记忆反思处理完成");
-                }
-            });
-            // --- 异步处理结束 ---
-
-            // 保存消息到数据库
+            // 保存ai消息到数据库
             let db_save_start = std::time::Instant::now();
             let save_message = SaveMessage {
                 message: user_message.clone(),
-                created_at: Utc::now(),
             };
             match channel_manager.send(save_message).await {
                 Ok(result) => match result {
@@ -140,15 +96,12 @@ pub async fn handle_message(
                         source_ip: "127.0.0.1".to_string(),
                         device_type: "local".to_string(),
                         content: MessageContent::Text(message.clone().content),
-                        created_at: message.created_at,
+                        created_at: Local::now().into(),
                     },
-                    created_at: Utc::now(),
                 };
                 match channel_manager.send(save_message).await {
                     Ok(result) => match result {
-                        Ok(_) => {
-                            debug!("ChatAgent响应保存到数据库成功");
-                        }
+                        Ok(_s) => {}
                         Err(e) => {
                             warn!("ChatAgent响应保存到数据库失败: {}", e);
                         }

@@ -1,20 +1,11 @@
-use std::collections::HashMap;
-
 use actix::prelude::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::chat::model::{MessageContent, UserMessage};
-
-/// Actor消息类型定义
-#[derive(Message)]
-#[rtype(result = "Result<()>")]
-pub struct SendMessage {
-    pub message: UserMessage,
-}
 
 /// 通道层管理器Actor
 pub struct ChannelManagerActor {
@@ -42,18 +33,17 @@ fn extract_content_text(content: &MessageContent) -> String {
         MessageContent::Multimodal(content_parts) => todo!(),
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveMessageResult {
+    pub message: UserMessage,
+}
+
 // 保存消息到数据库
 #[derive(Message)]
 #[rtype(result = "Result<SaveMessageResult>")]
 pub struct SaveMessage {
     // 消息内容
-    pub message: UserMessage,
-    // 保存时间
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SaveMessageResult {
     pub message: UserMessage,
 }
 
@@ -65,13 +55,11 @@ impl Handler<SaveMessage> for ChannelManagerActor {
         let user_message = msg.message;
 
         Box::pin(async move {
-            debug!("📨 处理 SaveMessage: user={}", user_message.sender);
-
             // 提取内容
             let content_text = extract_content_text(&user_message.content);
 
             // 执行插入
-            let row = sqlx::query(
+            sqlx::query(
                 r#"
                 INSERT INTO messages ("user", source_ip, device_type, content, created_at)
                 VALUES ($1, $2, $3, $4, $5)
@@ -90,21 +78,11 @@ impl Handler<SaveMessage> for ChannelManagerActor {
                 anyhow::anyhow!("保存失败: {}", e)
             })?;
 
-            let id: i32 = row.get("id");
-            debug!("✅ 保存成功: id={}, user={}", id, user_message.sender);
-
             Ok(SaveMessageResult {
                 message: user_message,
             })
         })
     }
-}
-
-#[derive(Deserialize)]
-pub struct HistoryQuery {
-    pub user: String,
-    pub limit: Option<i64>,
-    pub before: Option<chrono::DateTime<chrono::Utc>>, // 分页游标
 }
 
 // 返回的消息

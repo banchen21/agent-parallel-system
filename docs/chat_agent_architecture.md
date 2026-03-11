@@ -778,7 +778,7 @@ impl Handler<HealthCheck> for ChatAgent {
             openai_connection: openai_status,
             neo4j_connection: neo4j_status,
             channel_manager_connection: channel_manager_status,
-            last_check: Utc::now(),
+            last_check: Local::now(),
             uptime: self.start_time.elapsed(),
         })
     }

@@ -2,7 +2,7 @@ use actix::prelude::*;
 use anyhow::Result;
 use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
-use tracing::{debug, error, info};
+use tracing::info;
 
 /// Redis 管理器 Actor
 pub struct RedisActor {

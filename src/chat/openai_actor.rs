@@ -5,6 +5,7 @@ use async_openai::types::chat::ChatCompletionRequestMessage;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::timeout;
+use tracing::{debug, error, warn};
 /// 错误类型
 #[derive(Debug, Error)]
 pub enum ChatAgentError {
@@ -31,9 +32,6 @@ pub enum ChatAgentError {
 
     #[error("逻辑错误: {0}")]
     LogicError(String),
-
-    #[error("内部逻辑错误: {0}")]
-    InternalError(String),
 
     // 查询错误
     #[error("查询错误: {0}")]
@@ -69,13 +67,10 @@ impl Actor for OpenAIProxyActor {
 pub struct CallOpenAI {
     pub chat_completion_request_message: Vec<ChatCompletionRequestMessage>,
 }
-
 impl Handler<CallOpenAI> for OpenAIProxyActor {
-    // 确保这里的 Result 类型与 ActorFuture 的输出一致
     type Result = ResponseActFuture<Self, Result<String, ChatAgentError>>;
 
     fn handle(&mut self, msg: CallOpenAI, _ctx: &mut Self::Context) -> Self::Result {
-        // 1. 克隆所有权变量
         let client = self.client.clone();
         let model = self.model.clone();
         let max_tokens = self.max_tokens;
@@ -83,11 +78,11 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
         let max_retries = self.max_retries;
         let prompt = msg.chat_completion_request_message;
 
-        // 2. 显式标注异步块的返回类型，解决 {unknown} 问题
         let fut = async move {
-            let mut retries = 0;
-            loop {
-                // 构造请求
+            let mut last_err = ChatAgentError::TimeoutError("初始状态".into());
+
+            // 使用 for 循环更清晰地控制重试次数
+            for attempt in 1..=max_retries {
                 let request_res =
                     async_openai::types::chat::CreateChatCompletionRequestArgs::default()
                         .model(&model)
@@ -101,37 +96,52 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
                     Err(e) => return Err(e),
                 };
 
-                // 执行请求并带超时
+                // 执行请求并带超时控制
                 match timeout(
                     Duration::from_secs(timeout_secs),
                     client.chat().create(request),
                 )
                 .await
                 {
+                    // 1. 请求成功返回
                     Ok(Ok(response)) => {
                         if let Some(choice) = response.choices.first() {
                             if let Some(content) = &choice.message.content {
                                 return Ok(content.clone());
                             }
                         }
-                        return Err(ChatAgentError::TimeoutError("空响应".into()));
+                        return Err(ChatAgentError::TimeoutError("API返回了空响应".into()));
                     }
+
+                    // 2. API 报错或网络错误 (例如你遇到的 UnexpectedEof)
                     Ok(Err(e)) => {
-                        retries += 1;
-                        if retries >= max_retries {
-                            return Err(ChatAgentError::OpenAIError(e));
-                        }
-                        // 指数退避
-                        tokio::time::sleep(Duration::from_secs(2u64.pow(retries))).await;
+                        warn!(
+                            "OpenAI 调用出错 (第 {}/{} 次尝试): {}",
+                            attempt, max_retries, e
+                        );
+                        last_err = ChatAgentError::OpenAIError(e);
                     }
+
+                    // 3. 响应超时
                     Err(_) => {
-                        return Err(ChatAgentError::TimeoutError("OpenAI调用超时".into()));
+                        warn!("OpenAI 调用超时 (第 {}/{} 次尝试)", attempt, max_retries);
+                        last_err = ChatAgentError::TimeoutError("OpenAI调用超时".into());
                     }
                 }
+
+                // 如果还没到最后一次尝试，则等待后重试
+                if attempt < max_retries {
+                    let backoff = Duration::from_secs(2u64.pow(attempt as u32));
+                    debug!("等待 {:?} 后进行下一次重试...", backoff);
+                    tokio::time::sleep(backoff).await;
+                }
             }
+
+            // 耗尽重试次数后返回最后的错误
+            error!("OpenAI 调用在 {} 次重试后仍然失败", max_retries);
+            Err(last_err)
         };
 
-        // 3. 关键修复：使用 wrap_future 并显式转换成 Box::pin 的特质对象
         Box::pin(fut.into_actor(self))
     }
 }

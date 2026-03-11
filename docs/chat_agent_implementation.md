@@ -99,7 +99,7 @@ let user_message = UserMessage {
     id: Uuid::new_v4(),
     user_id: "user123".to_string(),
     content: "Hello, how are you?".to_string(),
-    timestamp: Utc::now(),
+    timestamp: Local::now(),
     metadata: HashMap::new(),
 };
 

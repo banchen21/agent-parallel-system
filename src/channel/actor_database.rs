@@ -1,7 +1,7 @@
 use actix::prelude::*;
 use anyhow::Result;
 use sqlx::PgPool;
-use tracing::{debug, error, info};
+use tracing::info;
 
 /// 数据库管理器
 pub struct DatabaseManager {

@@ -111,7 +111,7 @@ pub async fn handle_stream(
         message_type: MessageType::Chat,
         source_ip: client_ip,
         metadata: chat_request.metadata.clone(),
-        created_at: Utc::now(),
+        created_at: Local::now(),
     };
 
     let save_message = SaveMessage { message: user_message };
@@ -171,7 +171,7 @@ pub async fn handle_message(...) -> ActixResult<HttpResponse> {
             message_type: MessageType::System,
             source_ip: client_ip,
             metadata: chat_request.metadata.clone(),
-            created_at: Utc::now(),
+            created_at: Local::now(),
         },
     }).await;
 

@@ -1,6 +1,6 @@
 use actix::prelude::*;
 use serde::Serialize;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use sysinfo::{Disks, Networks, System};
 
 #[derive(Serialize, Clone, Debug)]

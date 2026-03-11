@@ -5,17 +5,13 @@ use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent,
 };
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tracing::{debug, error, info, warn};
+use tracing::error;
 
-use crate::chat::actor_messages::{ChannelManagerActor, GetMessages, ResultMessage};
+use crate::chat::actor_messages::ResultMessage;
 use crate::chat::model::MessageContent;
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
+use crate::task_handler::task_model::MessageClassificationResponse;
 use crate::utils::json_util::clean_json_string;
-use crate::{chat, task_handler::task_model::MessageClassificationResponse};
 
 /// TaskAgent Actor结构体
 /// 处理意图（指令）分析
@@ -41,7 +37,6 @@ impl TaskAgent {
         &self,
         long_term_memory: &str,
         short_term_memory: Vec<ResultMessage>,
-        user_content: MessageContent,
     ) -> String {
         self.prompt
             .clone()
@@ -96,8 +91,7 @@ impl Handler<OtherMessage> for TaskAgent {
             let user_content: MessageContent = msg.user_content;
 
             // 提示词构建
-            let prompt =
-                this.build_prompt(&long_term_memory, short_term_memory, user_content.clone());
+            let prompt = this.build_prompt(&long_term_memory, short_term_memory);
 
             // 4. 发送请求
             let response_text = this

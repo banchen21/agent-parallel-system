@@ -1,10 +1,10 @@
+use crate::chat;
 use crate::chat::actor_messages::{ChannelManagerActor, GetMessages, ResultMessage};
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
-use crate::graph_memory::actor_memory::GetMyName;
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
+use crate::graph_memory::actor_memory::{AgentMemoryHActor, QueryMemory};
+use crate::graph_memory::actor_memory::{GetMyName, UpdateMemory};
 use crate::task_handler::task_agent::{OtherMessage, TaskAgent};
 use crate::utils::json_util::clean_json_string;
-use crate::{chat, task_handler::task_model::MessageClassificationResponse};
 use actix::prelude::*;
 use anyhow::Result;
 use async_openai::types::chat::{
@@ -12,10 +12,11 @@ use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tracing::{debug, error, info, warn};
+use std::time::Duration;
+use tokio::time::sleep;
+use tracing::{debug, error, warn};
 
 pub const PERSONALITY_PATH: &str = "config/personality_setting.md";
 
@@ -47,7 +48,7 @@ impl ChatAgent {
     /// 读取人格设定文件
     async fn load_personality_setting(&self) -> String {
         tokio::task::spawn_blocking({
-            let path = PERSONALITY_PATH.clone();
+            let path = PERSONALITY_PATH;
             move || {
                 std::fs::read_to_string(&path).unwrap_or_else(|e| {
                     warn!("读取人格设定文件失败 ({}): {}, 使用默认值", path, e);
@@ -116,11 +117,11 @@ impl Handler<OtherUserMessage> for ChatAgent {
             let personality_task = this.load_personality_setting().await;
             let ai_name = this.agent_memory_hactor.send(GetMyName {}).await.unwrap();
             // 获取短期记忆（聊天记录）
-            let momory_content_short: Vec<ResultMessage> = match this
+            let memory_content_short: Vec<ResultMessage> = match this
                 .channel_manager
                 .send(GetMessages {
                     user: user_message.sender.clone(),
-                    ai_name,
+                    ai_name: ai_name.clone(),
                     before: Some(msg.content.created_at),
                     limit: 10,
                 })
@@ -141,10 +142,10 @@ impl Handler<OtherUserMessage> for ChatAgent {
             // 获取长期记忆
             let memory_mailbox_res = this
                 .agent_memory_hactor
-                .send(RequestMemory {
+                .send(QueryMemory {
                     user_name: user_message.sender.clone(),
                     // 短期记忆
-                    momory_content_short: momory_content_short.clone(),
+                    momory_content_short: memory_content_short.clone(),
                     message_content: user_message.content.clone(),
                 })
                 .await;
@@ -162,19 +163,75 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 }
             };
 
+            let this_clone = this.clone();
+            let user_name = user_message.sender.clone();
+            let memory_short_clone = memory_content_short.clone();
+            let message_content_clone = user_message.content.clone();
+            let knowledge_summary_clone = memory_content.clone();
+            let update_request = UpdateMemory {
+                user_name: user_name,
+                memory_content_short: memory_short_clone,
+                message_content: message_content_clone,
+                current_knowledge_summary: knowledge_summary_clone,
+            };
+
+            // 使用 tokio::spawn 开启一个真正的后台异步任务
+            tokio::spawn(async move {
+                let max_retries = 3; // 最大重试次数
+                let mut retry_delay = Duration::from_secs(2); // 初始延迟时间
+
+                for attempt in 1..=max_retries {
+                    // 因为发送请求会消耗掉 request，所以重试时需要 clone
+                    // 注意：UpdateMemory 结构体需要派生 Clone: #[derive(Clone)]
+                    let request_clone = update_request.clone();
+
+                    match this_clone.agent_memory_hactor.send(request_clone).await {
+                        Ok(Ok(_)) => {
+                            debug!("✅ 第 {} 次尝试成功：成功触发图数据库后台更新任务", attempt);
+                            return; // 成功后直接退出协程
+                        }
+                        Ok(Err(e)) => {
+                            error!(
+                                "❌ 智能关系分析处理 (第 {} 次尝试)：更新图数据库业务失败: {}",
+                                attempt, e
+                            );
+                            // 思考：如果是反序列化失败（如之前的 invalid type），重试可能无效
+                            // 但如果是数据库连接超时，重试是有意义的
+                        }
+                        Err(e) => {
+                            error!(
+                                "❌ 与 AgentMemory Actor 通信失败 (第 {} 次尝试): {}",
+                                attempt, e
+                            );
+                        }
+                    }
+
+                    if attempt < max_retries {
+                        warn!(
+                            "🔄 将在 {:?} 后进行第 {} 次重试...",
+                            retry_delay,
+                            attempt + 1
+                        );
+                        sleep(retry_delay).await;
+                        retry_delay *= 2; // 指数级增加延迟时间 (2s, 4s, 8s...)
+                    } else {
+                        error!(
+                            "🚫 已达到最大重试次数 ({})，放弃本次更新任务。",
+                            max_retries
+                        );
+                    }
+                }
+            });
+
             // 提交给意图识别智能体
             let res_task_message_classification = this
                 .task_agent
                 .send(OtherMessage {
                     long_term_memory: memory_content.clone(),
-                    short_term_memory: momory_content_short.clone(),
+                    short_term_memory: memory_content_short.clone(),
                     user_content: user_message.content.clone(),
                 })
                 .await;
-            debug!(
-                "意图识别智能体返回结果: {:#?}",
-                res_task_message_classification
-            );
             let is_task = match res_task_message_classification {
                 Ok(inner_res) => match inner_res {
                     Ok(content) => content.is_task,
@@ -189,11 +246,13 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 }
             };
 
+            debug!("是否有任务：{}", is_task);
+
             // 提示词构建
             let prompt = this.build_prompt(
                 personality_task,
                 memory_content,
-                momory_content_short,
+                memory_content_short,
                 user_message.sender.clone(),
                 user_message.content.to_string(),
                 is_task,
@@ -217,10 +276,10 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 })
                 .await
                 .map_err(ChatAgentError::from)??;
+            debug!("响应文本：{}", response_text);
 
             // 5. 处理响应结果
             let response_text = clean_json_string(&response_text).to_string();
-            debug!("🎉 ChatAgent 响应消息: {}", response_text);
             #[derive(Debug, Serialize, Deserialize)]
             struct ContentItem {
                 text: String,
@@ -236,13 +295,13 @@ impl Handler<OtherUserMessage> for ChatAgent {
                     for (_, item) in parsed_data.content.iter().enumerate() {
                         chat_messages_list.push(ChatMessage {
                             content: item.text.clone(),
-                            created_at: Utc::now(),
+                            created_at: Local::now().into(),
                         });
                     }
                 }
                 Err(e) => {
                     error!("❌ 解析 JSON 失败: {}", e);
-                    // 重试逻辑
+                    // TODO: ChatAgentError 暂时返回全部数据
                     return Err(ChatAgentError::LogicError(format!(
                         "JSON解析失败: {}, 原始响应: {}",
                         e, response_text

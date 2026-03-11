@@ -4,6 +4,7 @@ use actix_web::http::header;
 use actix_web::{App, HttpServer, web};
 use anyhow::{Context, Result};
 use async_openai::config::OpenAIConfig;
+use chrono::Utc;
 use dotenv::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
@@ -30,7 +31,7 @@ use crate::chat::openai_actor::OpenAIProxyActor;
 use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, RequestMemory};
+use crate::graph_memory::actor_memory::{AgentMemoryHActor, QueryMemory};
 use crate::lib::ensure_database_exists;
 use crate::task_handler::task_agent::TaskAgent;
 use crate::utils::env_util::env_var_or_default;
@@ -39,9 +40,15 @@ mod api;
 mod lib;
 // 工具
 mod utils;
+use chrono::Local;
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    unsafe {
+        std::env::set_var("TZ", "Asia/Shanghai");
+    }
+    println!("当前时间: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
+
     dotenv().ok();
 
     // 从环境变量读取日志级别，默认为 info
