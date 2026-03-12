@@ -12,7 +12,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent,
 };
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -113,7 +113,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
 
     fn handle(&mut self, msg: OtherUserMessage, _ctx: &mut Self::Context) -> Self::Result {
         let this = self.clone();
-        let user_message: chat::model::UserMessage = msg.content.clone();
+        let mut user_message: chat::model::UserMessage = msg.content.clone();
 
         Box::pin(async move {
             // 提示词模板
@@ -178,7 +178,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
             // 使用 tokio::spawn 开启一个真正的后台异步任务
             tokio::spawn(async move {
                 let max_retries = 3; // 最大重试次数
-                let mut retry_delay = Duration::from_secs(2); // 初始延迟时间
+                let mut retry_delay = Duration::from_secs(1); // 初始延迟时间
 
                 for attempt in 1..=max_retries {
                     // 因为发送请求会消耗掉 request，所以重试时需要 clone
@@ -247,6 +247,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
             };
 
             debug!("是否有任务：{}", is_task);
+            user_message.created_at = Utc::now() + Duration::from_hours(8);
 
             // 提示词构建
             let prompt = this.build_prompt(
@@ -254,9 +255,11 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 memory_content,
                 memory_content_short,
                 user_message.sender.clone(),
-                user_message.content.to_string(),
+                format!("{:?}", user_message),
                 is_task,
             );
+
+            debug!("提示词：{}", prompt);
 
             let response_text = this
                 .open_aiproxy_actor

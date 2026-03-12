@@ -26,7 +26,7 @@ impl DatabaseManager {
                 source_ip TEXT NOT NULL,
                 device_type TEXT NOT NULL,
                 content TEXT NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
         )
@@ -53,6 +53,17 @@ impl DatabaseManager {
         sqlx::query(
             r#"
     CREATE INDEX IF NOT EXISTS idx_messages_user_created_at ON messages ("user", created_at DESC);
+    "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // ALTER DATABASE dbname SET timezone = 'Asia/Shanghai';
+
+        // TODO 设定上海时区
+        sqlx::query(
+            r#"
+    ALTER DATABASE agent_system SET timezone = 'Asia/Shanghai';
     "#,
         )
         .execute(&self.pool)

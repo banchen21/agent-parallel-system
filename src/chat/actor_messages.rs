@@ -3,7 +3,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::chat::model::{MessageContent, UserMessage};
 
@@ -53,7 +53,6 @@ impl Handler<SaveMessage> for ChannelManagerActor {
     fn handle(&mut self, msg: SaveMessage, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
         let user_message = msg.message;
-
         Box::pin(async move {
             // 提取内容
             let content_text = extract_content_text(&user_message.content);
@@ -61,8 +60,8 @@ impl Handler<SaveMessage> for ChannelManagerActor {
             // 执行插入
             sqlx::query(
                 r#"
-                INSERT INTO messages ("user", source_ip, device_type, content, created_at)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO messages ("user", source_ip, device_type, content)
+                VALUES ($1, $2, $3, $4)
                 RETURNING id
                 "#,
             )
@@ -70,7 +69,6 @@ impl Handler<SaveMessage> for ChannelManagerActor {
             .bind(&user_message.source_ip)
             .bind(&user_message.device_type)
             .bind(content_text)
-            .bind(user_message.created_at)
             .fetch_one(&pool)
             .await
             .map_err(|e| {
