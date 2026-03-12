@@ -72,7 +72,11 @@ pub async fn fetch_all_entities(
                 for (k, v) in n_props {
                     properties.insert(k, bolt_to_string(v));
                 }
-                NodeInfo { id: n_id, labels: n_labels, properties }
+                NodeInfo {
+                    id: n_id,
+                    labels: n_labels,
+                    properties,
+                }
             });
         }
 
@@ -87,7 +91,13 @@ pub async fn fetch_all_entities(
                 for (k, v) in r_props {
                     properties.insert(k, bolt_to_string(v));
                 }
-                RelInfo { id: r_id, start_node_id: r_start, end_node_id: r_end, rel_type: r_type, properties }
+                RelInfo {
+                    id: r_id,
+                    start_node_id: r_start,
+                    end_node_id: r_end,
+                    rel_type: r_type,
+                    properties,
+                }
             });
         }
     }
@@ -100,16 +110,22 @@ pub async fn fetch_all_entities(
 
 pub fn format_graph_to_string(result: &ThreeLayerResult) -> String {
     let mut out = String::new();
-    
+
     // 1. 建立 ID 到节点的快速索引
     let node_map: HashMap<i64, &NodeInfo> = result.nodes.iter().map(|n| (n.id, n)).collect();
-    
+
     // 生成分割线
     let line = "=".repeat(50);
 
     // 使用 writeln! 写入缓冲区，.unwrap() 是因为向 String 写入几乎不会失败
     writeln!(out, "\n{}", line).unwrap();
-    writeln!(out, "🔍 图谱路径详细信息 ({} 节点, {} 关系)", result.nodes.len(), result.relationships.len()).unwrap();
+    writeln!(
+        out,
+        "🔍 图谱路径详细信息 ({} 节点, {} 关系)",
+        result.nodes.len(),
+        result.relationships.len()
+    )
+    .unwrap();
     writeln!(out, "{}", line).unwrap();
 
     // 2. 处理关系路径
@@ -129,10 +145,20 @@ pub fn format_graph_to_string(result: &ThreeLayerResult) -> String {
                 .cloned()
                 .unwrap_or_else(|| format!("ID:{}", rel.end_node_id));
 
-            writeln!(out, "\n🚀 路径: {} -[:{}]-> {}", start_name, rel.rel_type, end_name).unwrap();
+            writeln!(
+                out,
+                "\n🚀 路径: {} -[:{}]-> {}",
+                start_name, rel.rel_type, end_name
+            )
+            .unwrap();
 
             if let Some(n) = start_node {
-                writeln!(out, "   ├─ [源节点] 标签:{:?}, 属性: {:?}", n.labels, n.properties).unwrap();
+                writeln!(
+                    out,
+                    "   ├─ [源节点] 标签:{:?}, 属性: {:?}",
+                    n.labels, n.properties
+                )
+                .unwrap();
             }
 
             if rel.properties.is_empty() {
@@ -142,7 +168,12 @@ pub fn format_graph_to_string(result: &ThreeLayerResult) -> String {
             }
 
             if let Some(n) = end_node {
-                writeln!(out, "   └─ [目标节点] 标签:{:?}, 属性: {:?}", n.labels, n.properties).unwrap();
+                writeln!(
+                    out,
+                    "   └─ [目标节点] 标签:{:?}, 属性: {:?}",
+                    n.labels, n.properties
+                )
+                .unwrap();
             }
         }
     }
@@ -154,18 +185,25 @@ pub fn format_graph_to_string(result: &ThreeLayerResult) -> String {
         connected_ids.insert(rel.end_node_id);
     }
 
-    let lonely_nodes: Vec<&NodeInfo> = result.nodes.iter()
+    let lonely_nodes: Vec<&NodeInfo> = result
+        .nodes
+        .iter()
         .filter(|n| !connected_ids.contains(&n.id))
         .collect();
 
     if !lonely_nodes.is_empty() {
         writeln!(out, "\n📍 孤立节点 (无连接):").unwrap();
         for node in lonely_nodes {
-            writeln!(out, "   • {} (标签:{:?}, 属性:{:?})", 
-                node.properties.get("name").unwrap_or(&format!("ID:{}", node.id)),
-                node.labels, 
+            writeln!(
+                out,
+                "   • {} (标签:{:?}, 属性:{:?})",
                 node.properties
-            ).unwrap();
+                    .get("name")
+                    .unwrap_or(&format!("ID:{}", node.id)),
+                node.labels,
+                node.properties
+            )
+            .unwrap();
         }
     }
     writeln!(out, "\n{}", line).unwrap();

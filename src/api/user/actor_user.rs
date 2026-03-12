@@ -47,7 +47,7 @@ impl Handler<CreateUser> for UserManagerActor {
                 INSERT INTO users (username, password_hash, email)
                 VALUES ($1, $2, $3)
                 RETURNING id, username, password_hash, email, created_at, updated_at
-                "#
+                "#,
             )
             .bind(msg.username)
             .bind(msg.password_hash)
