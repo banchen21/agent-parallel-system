@@ -1,10 +1,8 @@
 use actix_cors::Cors;
-use actix_web::cookie::time;
 use actix_web::http::header;
 use actix_web::{App, HttpServer, web};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_openai::config::OpenAIConfig;
-use chrono::Utc;
 use dotenv::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
@@ -31,7 +29,7 @@ use crate::chat::openai_actor::OpenAIProxyActor;
 use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, QueryMemory};
+use crate::graph_memory::actor_memory::AgentMemoryHActor;
 use crate::lib::ensure_database_exists;
 use crate::task_handler::task_agent::TaskAgent;
 use crate::utils::env_util::env_var_or_default;
@@ -47,7 +45,6 @@ async fn main() -> Result<()> {
     unsafe {
         std::env::set_var("TZ", "Asia/Shanghai");
     }
-    println!("当前时间: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
 
     dotenv().ok();
 
@@ -60,6 +57,7 @@ async fn main() -> Result<()> {
 
     info!("正在启动 Agent Parallel System (Actix架构)...");
 
+    info!("当前时间: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
     // 系统监控
     let sys_monitor_actor = SysMonitorActor::new().start();
 
@@ -95,6 +93,8 @@ async fn main() -> Result<()> {
 
     // neo4j 图数据库+智能记忆管理体
     let agent_memory_prompt = config.memory_agent.clone();
+    let enable_memory_query = config.features.enable_memory_query;
+    let max_query_depth = config.features.max_query_depth;
     let neo4j_uri = env_var_or_default("NEO4J_URI", "127.0.0.1:7687".to_string());
     let neo4j_user = env_var_or_default("NEO4J_USERNAME", "neo4j".to_string());
     let neo4j_pass = env_var_or_default("NEO4J_PASSWORD", "neo4j".to_string());
@@ -105,6 +105,8 @@ async fn main() -> Result<()> {
         &neo4j_pass,
         open_aiproxy_actor.clone(),
         agent_memory_prompt,
+        enable_memory_query,
+        max_query_depth,
     )
     .await
     .expect("无法连接到 Neo4j");

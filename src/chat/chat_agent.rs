@@ -147,9 +147,6 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 .agent_memory_hactor
                 .send(QueryMemory {
                     user_name: user_message.sender.clone(),
-                    // 短期记忆
-                    momory_content_short: memory_content_short.clone(),
-                    message_content: user_message.content.clone(),
                 })
                 .await;
             let memory_content = match memory_mailbox_res {
