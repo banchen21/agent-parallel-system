@@ -10,9 +10,16 @@ pub struct Settings {
     pub app_name: String,
     pub environment: String,
     pub app_url: String,
+    pub limits: LimitsConfig,
     pub chat_agent: ChatAgentConfig,
     pub memory_agent: MemoryAgentConfig,
     pub task_agent: TaskAgentConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LimitsConfig {
+    pub chat_history_limit: i64,
+    pub api_history_limit: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -45,6 +52,8 @@ impl Settings {
 
         let s = Config::builder()
             // 默认值
+            .set_default("limits.chat_history_limit", 10)?
+            .set_default("limits.api_history_limit", 20)?
             .set_default("chat_agent.prompt", r#""#)?
             .set_default("memory_agent.prompt_query", r#""#)?
             .set_default("memory_agent.prompt_summary", r#""#)?

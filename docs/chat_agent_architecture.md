@@ -88,7 +88,7 @@ pub struct SessionContext {
     pub user_id: String,
     pub current_topic: Option<String>,
     pub conversation_state: ConversationState,
-    pub last_activity: DateTime<Utc>,
+    pub last_activity: DateTime<Local>,
     pub context_variables: HashMap<String, serde_json::Value>,
 }
 
@@ -440,7 +440,7 @@ pub struct SaveProcessedMessage {
 pub struct GetMessageHistory {
     pub session_id: String,
     pub limit: Option<u32>,
-    pub before: Option<DateTime<Utc>>,
+    pub before: Option<DateTime<Local>>,
 }
 ```
 
@@ -748,7 +748,7 @@ pub struct HealthStatus {
     pub openai_connection: bool,
     pub neo4j_connection: bool,
     pub channel_manager_connection: bool,
-    pub last_check: DateTime<Utc>,
+    pub last_check: DateTime<Local>,
     pub uptime: Duration,
 }
 

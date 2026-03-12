@@ -36,18 +36,7 @@ pub async fn handle_message(
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let chat_request = match serde_json::from_str::<ChatRequest>(
-        &serde_json::to_string(&chat_request).unwrap_or_default(),
-    ) {
-        Ok(req) => req,
-        Err(e) => {
-            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                "error": "Invalid JSON format",
-                "details": e.to_string()
-            })));
-        }
-    };
-
+    let chat_request = chat_request.clone();
     // 构造 UserMessage
     let user_message = UserMessage {
         sender: chat_request.user,
@@ -155,6 +144,7 @@ pub async fn get_message_history(
     query: web::Query<HistoryQuery>,
     channel_manager: web::Data<Addr<ChannelManagerActor>>,
     agent_memory_hactor: web::Data<Addr<AgentMemoryHActor>>,
+    config: web::Data<crate::core::config::Settings>,
     user: web::ReqData<String>,
 ) -> ActixResult<HttpResponse> {
     // 获取用户名字符串
@@ -173,7 +163,7 @@ pub async fn get_message_history(
             user: username, // 使用中间件解析出的用户名
             ai_name,
             before: query.before,
-            limit: query.limit.unwrap_or(20),
+            limit: query.limit.unwrap_or(config.limits.api_history_limit),
         })
         .await;
 

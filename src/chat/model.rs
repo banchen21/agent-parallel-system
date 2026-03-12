@@ -1,7 +1,5 @@
-use actix_web::web::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// 用户发消息过来的消息结构体 - 兼容各种格式
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,13 +15,6 @@ pub struct UserMessage {
     /// 创建时间
     pub created_at: DateTime<Utc>,
 }
-
-impl UserMessage {
-    fn to_string(&self) -> String {
-        serde_json::to_string(self).unwrap()
-    }
-}
-
 // 1. 定义消息内容的枚举：要么是纯文本，要么是多模态部件数组
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

@@ -1,6 +1,6 @@
 use actix::prelude::*;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tracing::{error, info};
@@ -100,7 +100,7 @@ pub struct ResultMessage {
 pub struct GetMessages {
     pub user: String,
     pub ai_name: String,
-    pub before: Option<chrono::DateTime<chrono::Utc>>,
+    pub before: Option<DateTime<Utc>>,
     pub limit: i64,
 }
 

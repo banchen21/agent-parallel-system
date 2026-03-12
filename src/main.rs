@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     let config = CONFIG.clone();
 
     // neo4j 图数据库+智能记忆管理体
-    let agent_memory_prompt = config.memory_agent;
+    let agent_memory_prompt = config.memory_agent.clone();
     let neo4j_uri = env_var_or_default("NEO4J_URI", "127.0.0.1:7687".to_string());
     let neo4j_user = env_var_or_default("NEO4J_USERNAME", "neo4j".to_string());
     let neo4j_pass = env_var_or_default("NEO4J_PASSWORD", "neo4j".to_string());
@@ -128,17 +128,19 @@ async fn main() -> Result<()> {
     let user_manager = crate::api::user::actor_user::UserManagerActor::new(pool.clone()).start();
 
     // 初始化任务Agent
-    let task_agent_prompt = config.task_agent.prompt;
+    let task_agent_prompt = config.task_agent.prompt.clone();
     let task_agent = TaskAgent::new(open_aiproxy_actor.clone(), task_agent_prompt).start();
 
     // 初始化聊天agent
-    let chat_agent_prompt = config.chat_agent.prompt;
+    let chat_agent_prompt = config.chat_agent.prompt.clone();
+    let chat_history_limit = config.limits.chat_history_limit;
     let chat_agent = ChatAgent::new(
         channel_manager.clone(),
         agent_memory_hactor_addr.clone(),
         open_aiproxy_actor.clone(),
         task_agent.clone(),
         chat_agent_prompt,
+        chat_history_limit,
     )
     .start();
 
@@ -181,6 +183,7 @@ async fn main() -> Result<()> {
             .app_data(web::Data::new(redis_addr.clone()))
             .app_data(web::Data::new(chat_agent.clone()))
             .app_data(web::Data::new(sys_monitor_actor.clone()))
+            .app_data(web::Data::new(config.clone()))
             .configure(configure_api_routes)
     })
     .bind(("0.0.0.0", 8000))?

@@ -12,7 +12,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent,
 };
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -27,6 +27,7 @@ pub struct ChatAgent {
     agent_memory_hactor: Addr<AgentMemoryHActor>,
     task_agent: Addr<TaskAgent>,
     prompt: String,
+    chat_history_limit: i64,
 }
 impl ChatAgent {
     pub fn new(
@@ -35,6 +36,7 @@ impl ChatAgent {
         open_aiproxy_actor: Addr<OpenAIProxyActor>,
         task_agent: Addr<TaskAgent>,
         prompt: String,
+        chat_history_limit: i64,
     ) -> Self {
         Self {
             channel_manager,
@@ -42,6 +44,7 @@ impl ChatAgent {
             open_aiproxy_actor,
             task_agent,
             prompt,
+            chat_history_limit,
         }
     }
 
@@ -96,7 +99,7 @@ pub struct ChatAgentResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub content: String,
-    pub created_at: DateTime<Utc>,
+    pub created_at: DateTime<Local>,
 }
 
 #[derive(Message)]
@@ -123,7 +126,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
                     user: user_message.sender.clone(),
                     ai_name: ai_name.clone(),
                     before: Some(msg.content.created_at),
-                    limit: 10,
+                    limit: this.chat_history_limit,
                 })
                 .await
             {
@@ -295,7 +298,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
                     for (_, item) in parsed_data.content.iter().enumerate() {
                         chat_messages_list.push(ChatMessage {
                             content: item.text.clone(),
-                            created_at: Local::now().into(),
+                            created_at: Local::now(),
                         });
                     }
                 }
@@ -324,6 +327,7 @@ impl Clone for ChatAgent {
             agent_memory_hactor: self.agent_memory_hactor.clone(),
             task_agent: self.task_agent.clone(),
             prompt: self.prompt.clone(),
+            chat_history_limit: self.chat_history_limit,
         }
     }
 }
