@@ -5,17 +5,20 @@ use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent,
 };
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::chat::actor_messages::ResultMessage;
 use crate::chat::model::MessageContent;
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
 use crate::task_handler::task_model::MessageClassificationResponse;
 use crate::utils::json_util::clean_json_string;
+use crate::workspace::workspace_actor::WorkspaceManageActor;
 
 /// TaskAgent Actor结构体
 /// 处理意图（指令）分析
 pub struct TaskAgent {
+    // 工作区
+    workspaces: Addr<WorkspaceManageActor>,
     open_aiproxy_actor: Addr<OpenAIProxyActor>,
     prompt: String, // 提示词
 }
@@ -25,9 +28,14 @@ impl Actor for TaskAgent {
 }
 
 impl TaskAgent {
-    pub fn new(open_aiproxy_actor: Addr<OpenAIProxyActor>, prompt: String) -> Self {
+    pub fn new(
+        open_aiproxy_actor: Addr<OpenAIProxyActor>,
+        workspaces: Addr<WorkspaceManageActor>,
+        prompt: String,
+    ) -> Self {
         Self {
             open_aiproxy_actor,
+            workspaces,
             prompt,
         }
     }
@@ -48,7 +56,7 @@ impl TaskAgent {
     }
 
     /// 处理分类响应
-    fn handle_classification(
+    async fn handle_classification(
         &self,
         content: String,
     ) -> Result<MessageClassificationResponse, ChatAgentError> {
@@ -56,6 +64,9 @@ impl TaskAgent {
             Ok(classification) => Ok(classification),
             Err(e) => {
                 error!("解析失败: {}, 原始内容: {}", e, content);
+
+                
+
                 // 重试逻辑
                 Err(ChatAgentError::SerializationError(e))
             }
@@ -109,12 +120,12 @@ impl Handler<OtherMessage> for TaskAgent {
                             ),
                         }),
                     ],
+                    tools: None,
+                    tool_choice: None,
                 })
                 .await
                 .map_err(ChatAgentError::from)??;
-
-            // 5. 处理响应结果
-            this.handle_classification(response_text)
+            this.handle_classification(response_text).await
         })
     }
 }
@@ -123,6 +134,7 @@ impl Clone for TaskAgent {
     fn clone(&self) -> Self {
         Self {
             open_aiproxy_actor: self.open_aiproxy_actor.clone(),
+            workspaces: self.workspaces.clone(),
             prompt: self.prompt.clone(),
         }
     }

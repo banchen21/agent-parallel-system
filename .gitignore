@@ -1,9 +1,6 @@
 /.vscode
 /target
 
-# 配置文件（包含敏感信息）
-config/*.toml
-
 # 环境变量文件
 .env
 

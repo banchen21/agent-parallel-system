@@ -71,6 +71,11 @@ impl DagOrchestrator {
         }
     }
 
+    // 查询所有任务
+    fn get_tasks(&self) -> Vec<TaskDef> {
+        self.tasks.values().cloned().collect()
+    }
+
     /// 执行具体任务的逻辑 (模拟)
     fn spawn_task(&mut self, task_id: String, duration: u64, addr: Addr<Self>) {
         // 更新状态为运行中

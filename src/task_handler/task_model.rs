@@ -3,6 +3,8 @@ use uuid::Uuid;
 
 use serde_json::Value;
 
+
+
 /// 消息分类响应结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageClassificationResponse {

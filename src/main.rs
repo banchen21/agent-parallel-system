@@ -6,13 +6,16 @@ use async_openai::config::OpenAIConfig;
 use dotenv::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 mod channel;
 mod core;
 
 // 聊天层消息处理
 mod chat;
+
+// 工作区
+mod workspace;
 
 // 任务层处理
 mod task_handler;
@@ -29,13 +32,14 @@ use crate::chat::openai_actor::OpenAIProxyActor;
 use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
-use crate::graph_memory::actor_memory::AgentMemoryHActor;
-use crate::lib::ensure_database_exists;
+use crate::graph_memory::actor_memory::AgentMemoryActor;
 use crate::task_handler::task_agent::TaskAgent;
+use crate::utils::database_util::ensure_database_exists;
 use crate::utils::env_util::env_var_or_default;
+use crate::workspace::workspace_actor::{CreateWorkspace, WorkspaceManageActor};
 use actix::Actor;
 mod api;
-mod lib;
+
 // 工具
 mod utils;
 use chrono::Local;
@@ -79,6 +83,7 @@ async fn main() -> Result<()> {
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
         "postgresql://postgres:password@localhost/agent_parallel_system".to_string()
     });
+    debug!("数据库连接字符串: {}", database_url);
     ensure_database_exists(&database_url).await?;
     let pool = PgPoolOptions::new()
         .max_connections(50) // 增加最大连接数
@@ -94,19 +99,17 @@ async fn main() -> Result<()> {
     // neo4j 图数据库+智能记忆管理体
     let agent_memory_prompt = config.memory_agent.clone();
     let enable_memory_query = config.features.enable_memory_query;
-    let max_query_depth = config.features.max_query_depth;
     let neo4j_uri = env_var_or_default("NEO4J_URI", "127.0.0.1:7687".to_string());
     let neo4j_user = env_var_or_default("NEO4J_USERNAME", "neo4j".to_string());
     let neo4j_pass = env_var_or_default("NEO4J_PASSWORD", "neo4j".to_string());
 
-    let agent_memory_hactor = AgentMemoryHActor::new(
+    let agent_memory_hactor = AgentMemoryActor::new(
         &neo4j_uri,
         &neo4j_user,
         &neo4j_pass,
         open_aiproxy_actor.clone(),
         agent_memory_prompt,
         enable_memory_query,
-        max_query_depth,
     )
     .await
     .expect("无法连接到 Neo4j");
@@ -129,9 +132,17 @@ async fn main() -> Result<()> {
     // 用户管理器Actor
     let user_manager = crate::api::user::actor_user::UserManagerActor::new(pool.clone()).start();
 
+    // 初始化工作区
+    let workspace_actor = WorkspaceManageActor::new(pool.clone()).start();
+
     // 初始化任务Agent
     let task_agent_prompt = config.task_agent.prompt.clone();
-    let task_agent = TaskAgent::new(open_aiproxy_actor.clone(), task_agent_prompt).start();
+    let task_agent = TaskAgent::new(
+        open_aiproxy_actor.clone(),
+        workspace_actor.clone(),
+        task_agent_prompt,
+    )
+    .start();
 
     // 初始化聊天agent
     let chat_agent_prompt = config.chat_agent.prompt.clone();
@@ -185,6 +196,7 @@ async fn main() -> Result<()> {
             .app_data(web::Data::new(redis_addr.clone()))
             .app_data(web::Data::new(chat_agent.clone()))
             .app_data(web::Data::new(sys_monitor_actor.clone()))
+            .app_data(web::Data::new(workspace_actor.clone()))
             .app_data(web::Data::new(config.clone()))
             .configure(configure_api_routes)
     })
@@ -217,6 +229,10 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(get_stats_handler)
             // 聊天相关接口
             .service(chat::handler::handle_message)
-            .service(chat::handler::get_message_history),
+            .service(chat::handler::get_message_history)
+            // 工作空间
+            .service(workspace::handler::get_workspace_handler)
+            .service(workspace::handler::create_workspac_handler)
+            .service(workspace::handler::delete_workspace_handler),
     );
 }

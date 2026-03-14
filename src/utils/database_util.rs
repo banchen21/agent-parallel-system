@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
-use tracing::{error, info};
+use tracing::{info};
 
 /// 从数据库URL中提取数据库名称
 fn extract_database_name(database_url: &str) -> Result<String> {

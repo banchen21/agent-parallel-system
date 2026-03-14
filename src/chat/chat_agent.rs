@@ -1,7 +1,7 @@
 use crate::chat;
 use crate::chat::actor_messages::{ChannelManagerActor, GetMessages, ResultMessage};
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, QueryMemory};
+use crate::graph_memory::actor_memory::{AgentMemoryActor, QueryMemory};
 use crate::graph_memory::actor_memory::{GetMyName, UpdateMemory};
 use crate::task_handler::task_agent::{OtherMessage, TaskAgent};
 use crate::utils::json_util::clean_json_string;
@@ -24,7 +24,7 @@ pub const PERSONALITY_PATH: &str = "config/personality_setting.md";
 pub struct ChatAgent {
     open_aiproxy_actor: Addr<OpenAIProxyActor>,
     channel_manager: Addr<ChannelManagerActor>,
-    agent_memory_hactor: Addr<AgentMemoryHActor>,
+    agent_memory_hactor: Addr<AgentMemoryActor>,
     task_agent: Addr<TaskAgent>,
     prompt: String,
     chat_history_limit: i64,
@@ -32,7 +32,7 @@ pub struct ChatAgent {
 impl ChatAgent {
     pub fn new(
         channel_manager: Addr<ChannelManagerActor>,
-        neo4j_channel_manager: Addr<AgentMemoryHActor>,
+        neo4j_channel_manager: Addr<AgentMemoryActor>,
         open_aiproxy_actor: Addr<OpenAIProxyActor>,
         task_agent: Addr<TaskAgent>,
         prompt: String,
@@ -176,52 +176,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
             };
 
             // 使用 tokio::spawn 开启一个真正的后台异步任务
-            tokio::spawn(async move {
-                let max_retries = 3; // 最大重试次数
-                let mut retry_delay = Duration::from_secs(1); // 初始延迟时间
-
-                for attempt in 1..=max_retries {
-                    // 因为发送请求会消耗掉 request，所以重试时需要 clone
-                    // 注意：UpdateMemory 结构体需要派生 Clone: #[derive(Clone)]
-                    let request_clone = update_request.clone();
-
-                    match this_clone.agent_memory_hactor.send(request_clone).await {
-                        Ok(Ok(_)) => {
-                            debug!("✅ 第 {} 次尝试成功：成功触发图数据库后台更新任务", attempt);
-                            return; // 成功后直接退出协程
-                        }
-                        Ok(Err(e)) => {
-                            error!(
-                                "❌ 智能关系分析处理 (第 {} 次尝试)：更新图数据库业务失败: {}",
-                                attempt, e
-                            );
-                            // 思考：如果是反序列化失败（如之前的 invalid type），重试可能无效
-                            // 但如果是数据库连接超时，重试是有意义的
-                        }
-                        Err(e) => {
-                            error!(
-                                "❌ 与 AgentMemory Actor 通信失败 (第 {} 次尝试): {}",
-                                attempt, e
-                            );
-                        }
-                    }
-
-                    if attempt < max_retries {
-                        warn!(
-                            "🔄 将在 {:?} 后进行第 {} 次重试...",
-                            retry_delay,
-                            attempt + 1
-                        );
-                        sleep(retry_delay).await;
-                        retry_delay *= 2; // 指数级增加延迟时间 (2s, 4s, 8s...)
-                    } else {
-                        error!(
-                            "🚫 已达到最大重试次数 ({})，放弃本次更新任务。",
-                            max_retries
-                        );
-                    }
-                }
-            });
+            spawn_memory_update_with_retry(update_request, this_clone.agent_memory_hactor.clone());
 
             // 提交给意图识别智能体
             let res_task_message_classification = this
@@ -252,14 +207,12 @@ impl Handler<OtherUserMessage> for ChatAgent {
             // 提示词构建
             let prompt = this.build_prompt(
                 personality_task,
-                memory_content,
-                memory_content_short,
+                memory_content.clone(),
+                memory_content_short.clone(),
                 user_message.sender.clone(),
                 format!("{:?}", user_message),
                 is_task,
             );
-
-            debug!("提示词：{}", prompt);
 
             let response_text = this
                 .open_aiproxy_actor
@@ -276,6 +229,8 @@ impl Handler<OtherUserMessage> for ChatAgent {
                             ),
                         }),
                     ],
+                    tools: None,
+                    tool_choice: None,
                 })
                 .await
                 .map_err(ChatAgentError::from)??;
@@ -304,7 +259,6 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 }
                 Err(e) => {
                     error!("❌ 解析 JSON 失败: {}", e);
-                    // TODO: ChatAgentError 暂时返回全部数据
                     return Err(ChatAgentError::LogicError(format!(
                         "JSON解析失败: {}, 原始响应: {}",
                         e, response_text
@@ -312,11 +266,79 @@ impl Handler<OtherUserMessage> for ChatAgent {
                 }
             }
 
+            let memory_short_clone = memory_content_short.clone();
+            let message_content_clone = response_text.clone();
+            let knowledge_summary_clone = memory_content.clone();
+
+            let update_request = UpdateMemory {
+                user_name: ai_name.clone(),
+                memory_content_short: memory_short_clone,
+                message_content: chat::model::MessageContent::Text(message_content_clone),
+                current_knowledge_summary: knowledge_summary_clone,
+            };
+
+            spawn_memory_update_with_retry(update_request, this_clone.agent_memory_hactor.clone());
             Ok(ChatAgentResponse {
                 content: chat_messages_list,
             })
         })
     }
+}
+
+fn spawn_memory_update_with_retry(
+    // 接收已经准备好的请求体
+    update_request: UpdateMemory,
+    // 接收 Agent Memory Actor 的地址
+    agent_memory_hactor_addr: Addr<AgentMemoryActor>,
+) {
+    // 使用 tokio::spawn 开启一个真正的后台异步任务
+    tokio::spawn(async move {
+        let max_retries = 3;
+        let mut retry_delay = Duration::from_secs(1);
+
+        for attempt in 1..=max_retries {
+            // 因为 update_request 是 move 进这个 async 块的，所以每次循环都需要克隆它
+            let request_clone = update_request.clone();
+
+            // 假设 AgentMemoryHactor 的 send 返回的是 Result<Result<SuccessType, ErrorType>, MailboxError>
+            match agent_memory_hactor_addr.send(request_clone).await {
+                Ok(Ok(_)) => {
+                    // 成功：Actor处理成功，且Actor本身没崩溃
+                    debug!("✅ 第 {} 次尝试成功：成功触发图数据库后台更新任务", attempt);
+                    return; // 成功后直接退出协程
+                }
+                Ok(Err(e)) => {
+                    // 业务逻辑失败
+                    error!(
+                        "❌ 智能关系分析处理 (第 {} 次尝试)：更新图数据库业务失败: {}",
+                        attempt, e
+                    );
+                }
+                Err(e) => {
+                    // Actor本身通信失败（如：Actor已停止）
+                    error!(
+                        "❌ 与 AgentMemory Actor 通信失败 (第 {} 次尝试): {}",
+                        attempt, e
+                    );
+                }
+            }
+
+            if attempt < max_retries {
+                warn!(
+                    "🔄 将在 {:?} 后进行第 {} 次重试...",
+                    retry_delay,
+                    attempt + 1
+                );
+                sleep(retry_delay).await;
+                retry_delay *= 2; // 指数级增加延迟时间 (2s, 4s, 8s...)
+            } else {
+                error!(
+                    "🚫 已达到最大重试次数 ({})，放弃本次更新任务。",
+                    max_retries
+                );
+            }
+        }
+    });
 }
 
 impl Clone for ChatAgent {

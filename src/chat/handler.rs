@@ -4,7 +4,7 @@ use crate::ChannelManagerActor;
 use crate::chat::actor_messages::{GetMessages, SaveMessage};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::MessageContent;
-use crate::graph_memory::actor_memory::{AgentMemoryHActor, GetMyName};
+use crate::graph_memory::actor_memory::{AgentMemoryActor, GetMyName};
 use actix::Addr;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, get, post, web};
 use chrono::{DateTime, Local, Utc};
@@ -26,7 +26,7 @@ pub async fn handle_message(
     chat_request: web::Json<ChatRequest>,
     chat_agent: web::Data<Addr<ChatAgent>>,
     channel_manager: web::Data<Addr<ChannelManagerActor>>,
-    agent_memory_hactor: web::Data<Addr<AgentMemoryHActor>>,
+    agent_memory_hactor: web::Data<Addr<AgentMemoryActor>>,
     req: HttpRequest,
 ) -> ActixResult<HttpResponse> {
     let start_time = std::time::Instant::now();
@@ -143,7 +143,7 @@ pub struct HistoryQuery {
 pub async fn get_message_history(
     query: web::Query<HistoryQuery>,
     channel_manager: web::Data<Addr<ChannelManagerActor>>,
-    agent_memory_hactor: web::Data<Addr<AgentMemoryHActor>>,
+    agent_memory_hactor: web::Data<Addr<AgentMemoryActor>>,
     config: web::Data<crate::core::config::Settings>,
     user: web::ReqData<String>,
 ) -> ActixResult<HttpResponse> {

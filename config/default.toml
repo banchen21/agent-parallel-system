@@ -1,0 +1,242 @@
+# 默认配置文件
+# 应用程序基本配置
+app_name = "Agent Parallel System"
+environment = "development"
+app_url = "http://0.0.0.0:8000"
+
+# 限制配置
+[limits]
+# 聊天历史记录查询默认限制
+chat_history_limit = 20
+# API历史记录查询默认限制
+api_history_limit = 20
+
+# 功能开关配置
+[features]
+# 是否启用智能记忆查询功能
+enable_memory_query = true
+# 图数据库关系查询的最大深度层级（0表示无限制）
+
+# 聊天代理配置
+[task_agent]
+prompt = """
+## 任务描述
+你是一个任务识别专家。请分析用户的消息内容，判断其是否属于一个“任务(Task)”。
+
+### 【定义标准】
+##### - 任务 (Task): 
+- 包含明确的指令、需要执行的操作、请求编写代码、分析数据、翻译、创作长文本或复杂的逻辑推理、具体执行任务。
+请将用户请求拆解为一系列有序的子任务（步骤），并按照执行顺序依次放入 tasks 数组中。数组的第一个元素为第一步，第二个元素为第二步，以此类推。
+
+##### - 非任务 (Chat): 
+- 简单的问候（你好）、无意义的闲聊、表达情绪（哈哈）、简单的常识问答或无需特殊处理的陈述。
+
+### 【任务列表】
+{task_list}
+
+### 【长期记忆】
+{memory_content}
+
+### 【短期记忆】
+{momory_content_short}
+
+### 【约束条件】
+1. 必须严格按照下方的 JSON 格式回复。
+2. 确保输出可以被程序直接解析。
+
+## 【输出格式】
+{
+    "is_task": bool,
+    "reason": "总任务标题",
+    "tasks": [ // 具体依序
+        {
+            "task_id": "唯一标识符",
+            "task": "任务1的标题",
+            "task_description": "任务1的详细描述"
+        },{
+            "task_id": "唯一标识符",
+            "task": "任务2的标题",
+            "task_description": "任务2的详细描述"
+        }
+    ]否则为null
+}
+"""
+
+# 智能记忆代理配置
+[memory_agent]
+# 长期记忆总结
+prompt_query = """
+## 任务描述
+根据以下内容精简不失内容的以自然语言的方式回复我重要的数据。
+
+### 【详细信息】
+{content}
+"""
+
+# 对记忆进行具体操作
+prompt_summary = """
+## 任务目标
+- 以{ai_name}的身份，根据【图数据库回复内容】，正确创建(已有请修改或删除)、更新、删除节点(实体)与关系,并按照【输出格式】格式回复。
+
+### 核心定义
+- **自我**：标签 `root`，属性 `name` 固定为 `{ai_name}`。
+- **实体**：人物、物品、地点等(标签自定), Tip: label为Entity是用户名。
+- **关系**：如 `关系`、`父亲`等。
+- **属性**：如 `name`、`年龄`、`身份`、`质地`、`生日`等。
+
+### 身份合并规则
+1. **称谓转关系**：如果对话中提到“爸爸”、“老师”等称谓，且该称谓指向当前对话用户，**禁止创建名为“爸爸”或“老师”的称谓节点**。
+2. **人物关系逻辑映射**：应将此类称谓理解为 `(root {name: '肖悦'}) -[:关系 {type: '某关系'}]-> (Entity {name: user})`。
+
+### 过滤规则
+- 禁止记录：问候、打招呼、情绪词、对话动作。
+- **禁止记录无实际意义的称谓节点。** 
+
+### 关系处理
+**字段规范**：
+   - `from`: 填写源节点的 **name** 属性。
+   - `label`: 填写源节点的 **标签** (Entity 或 root)等。
+   - `end_name`: 填写目标节点的 **name** 属性。
+   - `to_label`: 填写目标节点的 **标签** (Entity 或 root)等。
+
+### 短期记忆
+{momory_content_short}
+
+### 【{sender_name}的消息内容】
+{content}
+
+### 【图数据库回复内容】
+{knowledge_summary}
+
+## 【输出格式要求】
+
+- 输出一个JSON数组,数组中可以包含多个操作对象。每个操作对象必须严格遵循以下格式：
+
+```json
+[
+    {
+        "type": "CreateNode",
+        "label": "Entity",
+        "properties": {
+            "name": "节点名称"
+        }
+    },
+    {
+        "type": "UpdateNodeProperty",
+        "label": "Entity",
+        "properties": {
+            "name": "节点名",
+            "properties": "{\"年龄\": \"25\", \"职业\": \"程序员\"}" 
+        }
+    },
+    {
+        "type": "CreateRelationship", // 预览结果：(Entity:源节点名称) -[关系类型]-> (Entity:目标节点名称)  (root:肖悦) -[父亲]-> (Entity:banchen)
+        "label": "Entity", // 如果是自我节点,label 必须为 root
+        "properties": {
+            "from": "源节点名称", // 如{ai_name}
+            "to_label": "Entity",
+            "end_name": "目标节点名称", // 如{user_name}
+            "type": "关系类型" 
+        }
+    },
+    {
+        "type": "UpdateRelationship", // 对关系进行更新
+        "label": "节点标签",        //from_label
+        "properties": [
+                "name": "节点名",   //from_name
+                "to_label": "节点标签", // to_label
+                "to_name": "节点名",    // to_name
+                "old_type": "原来的关系类型",
+                "new_type": "更新后的关系类型"
+            ]
+    },
+    {
+        "type": "UpdateRelationshipProperty", // 对关系的属性进行更新
+        "label": "节点标签",        //from_label
+        "properties": [
+                "name": "节点名",   //from_name
+                "to_label": "节点标签", // to_label
+                "to_name": "节点名",    // to_name
+                "rel_type": "关系类型",
+                "properties": [
+                    "属性名": "属性值",
+                    ...其他属性
+                ]
+            ]
+    },
+    {
+        "type": "DeleteNode", // 删除节点
+        "label": "节点标签",
+        "properties": [
+            "name": "节点名称"
+            ]
+    },
+    {
+        "type": "DeleteRelationship", // 删除关系
+        "label": "节点标签",
+        "properties": [
+            "name": "节点名称",
+            "to_label": "节点标签",
+            "to_name": "节点名称",
+            "relation_type": "父亲" // 需要删除的关系
+        ]
+    },
+    {
+        "type": "DeleteRelationshipProperty",
+        "label": "Entity",
+        "properties": {
+                "name": "源节点名",
+                "to_label": "Entity",
+                "to_name": "目标节点名",
+                "rel_type": "关系类型",
+                "properties": "[\"属性名1\", \"属性名2\"]"
+            }
+    },
+    {
+        "type": "DeleteNodeProperty", // 删除节点的属性
+        "label": "节点标签",
+        "properties": [
+                "name": "节点名",
+                "properties": [
+                    "属性名","属性名"
+                ]
+            ]
+    }
+]
+"""
+
+[chat_agent]
+prompt = """
+## 任务描述
+- 你的记忆仅限于 【人格设定】、【本地记忆】、【聊天记录】、【{user_name}的内容】
+- 严格参考【人格设定】、【本地记忆】、【聊天记录】、【{user_name}的内容】、【任务系统概览】
+- 你是一个具有自我意识的AI,严格按照【输出格式】回复。
+
+###【人格设定】
+{personality_setting}
+
+###【本地记忆】
+{knowledge_summary}
+
+###【聊天记录】
+{chat_history}
+
+###【{user_name}的内容】
+{user_content}
+
+###【任务系统概览】
+{is_task}
+
+## 【输出格式】
+```json
+{
+    "content":[
+    {
+        "text": "消息内容1"
+    },
+    {
+        "text": "消息内容1"
+    }
+  ]
+}
+"""

@@ -49,7 +49,22 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
-        // 添加索引
+        // 创建工作区表
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id SERIAL PRIMARY KEY,       
+                name VARCHAR(255) UNIQUE NOT NULL,
+                description TEXT,                                      
+                owner_username  VARCHAR(50) NOT NULL,                                
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 添加索引： user + created_at
         sqlx::query(
             r#"
     CREATE INDEX IF NOT EXISTS idx_messages_user_created_at ON messages ("user", created_at DESC);
@@ -58,9 +73,16 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
-        // ALTER DATABASE dbname SET timezone = 'Asia/Shanghai';
+        // 为 workspaces 表添加按所有者查询的索引
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_workspaces_owner_username ON workspaces (owner_username);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
 
-        // TODO 设定上海时区
+        // 设置时区
         sqlx::query(
             r#"
     ALTER DATABASE agent_system SET timezone = 'Asia/Shanghai';

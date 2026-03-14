@@ -24,7 +24,7 @@ impl UserManagerActor {
 }
 
 /// Actor 消息：创建新用户（注册）
-#[derive(Message)]
+#[derive(Message,Debug)]
 #[rtype(result = "Result<User>")]
 pub struct CreateUser {
     pub username: String,
@@ -39,8 +39,9 @@ impl Handler<CreateUser> for UserManagerActor {
     fn handle(&mut self, msg: CreateUser, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
 
+        debug!("🏗️ 开始创建用户: {:#?}", msg);
+
         Box::pin(async move {
-            debug!("👤 正在创建用户: {}", msg.username);
 
             let user = sqlx::query_as::<_, User>(
                 r#"
