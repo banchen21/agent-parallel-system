@@ -8,4 +8,4 @@ logs/
 run.log
 
 # 屏蔽config文件夹
-/config
+config/default.toml
