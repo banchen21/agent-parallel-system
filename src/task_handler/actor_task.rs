@@ -4,8 +4,7 @@ use tracing::{debug, info};
 
 use crate::{
     chat::openai_actor::ChatAgentError,
-    task_handler::agents::AgentId,
-    task_handler::task_model::{TaskItem, TaskStatus},
+    task_handler::task_model::{TaskItem, TaskStatus}, workspace::model::AgentId,
 };
 
 /// 任务 ID 类型（编排器内部使用的唯一键）
@@ -161,7 +160,11 @@ impl Handler<ClaimTask> for DagOrchestrator {
         }
         task.status = Some(TaskStatus::Accepted);
         self.task_assignments.insert(msg.task_id, msg.agent_id);
-        let agent_name = self.agents.get(&msg.agent_id).map(String::as_str).unwrap_or("?");
+        let agent_name = self
+            .agents
+            .get(&msg.agent_id)
+            .map(String::as_str)
+            .unwrap_or("?");
         info!(
             task_id = %msg.task_id,
             agent_id = %msg.agent_id,

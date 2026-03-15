@@ -17,12 +17,19 @@ mod chat;
 // 工作区
 mod workspace;
 
+mod agsnets;
+
 // 任务层处理
 mod task_handler;
 
 // neo4j图数据库记忆层
 mod graph_memory;
 
+// MCP 配置管理
+mod mcp;
+
+use crate::agsnets::actor_agents::AgentManageActor;
+use crate::mcp::mcp_actor::McpManagerActor;
 use crate::api::auth::Auth;
 // 引入通道层模块
 use crate::channel::actor_database::DatabaseManager;
@@ -37,7 +44,7 @@ use crate::task_handler::actor_task::DagOrchestrator;
 use crate::task_handler::task_agent::TaskAgent;
 use crate::utils::database_util::ensure_database_exists;
 use crate::utils::env_util::env_var_or_default;
-use crate::workspace::workspace_actor::{CreateWorkspace, WorkspaceManageActor};
+use crate::workspace::workspace_actor::WorkspaceManageActor;
 use actix::Actor;
 mod api;
 
@@ -137,7 +144,10 @@ async fn main() -> Result<()> {
     let workspace_actor = WorkspaceManageActor::new(pool.clone()).start();
 
     // 任务管理
-    let dag_orchestrator: actix::Addr<DagOrchestrator>=DagOrchestrator::new().start();
+    let dag_orchestrator: actix::Addr<DagOrchestrator> = DagOrchestrator::new().start();
+
+    //AgentActor
+    let agents_actor = AgentManageActor::new(pool.clone(),open_aiproxy_actor.clone()).start();
 
     // 初始化任务Agent
     let task_agent_prompt = config.task_agent.prompt.clone();
@@ -195,6 +205,7 @@ async fn main() -> Result<()> {
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(agents_actor.clone()))
             .app_data(web::Data::new(agent_memory_hactor_addr.clone()))
             .app_data(web::Data::new(channel_manager.clone()))
             .app_data(web::Data::new(user_manager.clone()))
@@ -233,11 +244,18 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             // 系统资源监控
             .service(get_stats_handler)
             // 聊天：WebSocket 消息 + HTTP 历史
-            .service(chat::handler::ws_message)
+            .service(chat::handler::handle_message)
             .service(chat::handler::get_message_history)
             // 工作空间
             .service(workspace::handler::get_workspace_handler)
             .service(workspace::handler::create_workspac_handler)
-            .service(workspace::handler::delete_workspace_handler),
+            .service(workspace::handler::delete_workspace_handler)
+            // 智能体
+            .service(agsnets::handler::create_agent_handler)
+            // MCP 配置管理
+            .service(mcp::handler::add_mcp_handler)
+            .service(mcp::handler::delete_mcp_handler)
+            .service(mcp::handler::get_mcp_handler)
+            .service(mcp::handler::list_mcp_handler),
     );
 }

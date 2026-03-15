@@ -36,7 +36,7 @@ pub async fn handle_message(
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let mut chat_request = chat_request.clone();
+    let chat_request = chat_request.clone();
     // 构造 UserMessage
     let user_message = UserMessage {
         sender: chat_request.user,

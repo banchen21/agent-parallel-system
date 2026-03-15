@@ -175,15 +175,6 @@ impl AgentMemoryActor {
         info!("数据库根节点名字已同步为: {}", name);
         Ok(())
     }
-
-    // 修改根节点name
-    pub async fn update_root_name(&self, name: &str) -> Result<()> {
-        let query_str = "MATCH (r:root) SET r.name = $value";
-        self.graph
-            .run(query(query_str).param("value", name))
-            .await?;
-        Ok(())
-    }
 }
 
 impl Actor for AgentMemoryActor {

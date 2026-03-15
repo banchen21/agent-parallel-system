@@ -3,12 +3,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
+use std::fs::remove_dir_all;
 use tracing::info;
 
-use crate::task_handler::agents::{AgentInfo, AgentKind};
-use crate::utils::workspace_path::{
-    agent_memory_dir, agent_dir, ensure_dir, workspace_agents_dir, workspace_dir,
-};
+use crate::utils::workspace_path::{ensure_dir, workspace_agents_dir, workspace_dir};
 use crate::workspace::model::WorkspaceError;
 
 // ==================== Manage Actor 定义 ====================
@@ -86,6 +84,12 @@ pub struct WorkspaceInfo {
     pub description: Option<String>,
     pub owner_username: String,
     pub created_at: DateTime<Utc>,
+    // 工作区中的智能体数量
+    #[sqlx(default)]
+    pub agent_count: i64,
+    // 工作区中的任务数量（如果有任务表的话）
+    #[sqlx(default)]
+    pub task_count: i64,
 }
 
 // ==================== Handlers 实现 ====================
@@ -190,98 +194,65 @@ impl Handler<DeleteWorkspace> for WorkspaceManageActor {
         Box::pin(
             actix::fut::wrap_future(fut).map(move |res, actor: &mut Self, _ctx| {
                 if res.is_ok() {
-                    actor.workspaces.remove(&name_clone);
+                    // 删除工作区目录
+                    let ws_dir = workspace_dir(&name_clone);
+                    let agents_dir = workspace_agents_dir(&name_clone);
+                    if let Err(e) =
+                        remove_dir_all(&ws_dir).and_then(|_| remove_dir_all(&agents_dir))
+                    {
+                        tracing::warn!(
+                            workspace = %name_clone,
+                            error = %e,
+                            "删除工作区目录失败（数据库已删除）"
+                        );
+                    }
+                    actor.workspaces.remove(&name_clone.clone());
                 }
                 res
             }),
         )
     }
 }
-
-/// 查询所有工作区消息
+/// 查询用户拥有的工作空间
 #[derive(Message)]
 #[rtype(result = "Result<Vec<WorkspaceInfo>, WorkspaceError>")]
-pub struct GetWorkspaces;
+pub struct GetWorkspaces(pub String);
 
 /// 3. 处理查询工作区列表
 impl Handler<GetWorkspaces> for WorkspaceManageActor {
     type Result = ResponseActFuture<Self, Result<Vec<WorkspaceInfo>, WorkspaceError>>;
 
-    fn handle(&mut self, _msg: GetWorkspaces, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: GetWorkspaces, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
 
+        // 1. 获取消息中传递的用户名（注意去掉了 msg 前的下划线）
+        let user_name = msg.0.clone();
+
         let fut = async move {
-            // 【修复 3】查询字段和结构体要求一致，移除原来并不在结构体内的 path 和 updated_at 字段
+            // 2. 在 SQL 中增加 WHERE 条件，根据 owner_username 过滤，并统计智能体和任务数量
             sqlx::query_as::<_, WorkspaceInfo>(
-                "SELECT id, name, description, owner_username, created_at FROM workspaces ORDER BY id ASC",
+                r#"
+                SELECT
+                    w.id,
+                    w.name,
+                    w.description,
+                    w.owner_username,
+                    w.created_at,
+                    COALESCE(COUNT(DISTINCT a.id), 0)::bigint as agent_count,
+                    0::bigint as task_count
+                FROM workspaces w
+                LEFT JOIN agents a ON a.workspace_name = w.name
+                WHERE w.owner_username = $1
+                GROUP BY w.id, w.name, w.description, w.owner_username, w.created_at
+                ORDER BY w.id ASC
+                "#,
             )
+            .bind(user_name) // 3. 绑定具体的用户名参数
             .fetch_all(&pool)
             .await
             .map_err(WorkspaceError::DatabaseError)
         };
 
         Box::pin(actix::fut::wrap_future::<_, Self>(fut))
-    }
-}
-
-// ---------- 创建 Agent：参数存 PostgreSQL，记忆目录建在工作区 .workspace/<name>/agents/<id>/ ----------
-#[derive(Message)]
-#[rtype(result = "Result<AgentInfo, WorkspaceError>")]
-pub struct CreateAgent {
-    pub name: String,
-    pub kind: AgentKind,
-    pub workspace_name: String,
-}
-
-impl Handler<CreateAgent> for WorkspaceManageActor {
-    type Result = ResponseActFuture<Self, Result<AgentInfo, WorkspaceError>>;
-
-    fn handle(&mut self, msg: CreateAgent, _ctx: &mut Self::Context) -> Self::Result {
-        let pool = self.pool.clone();
-        let name = msg.name;
-        let kind = msg.kind;
-        let workspace_name = msg.workspace_name;
-
-        let fut = async move {
-            // 1. 检查工作区是否存在
-            let exists: (bool,) = sqlx::query_as(
-                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE name = $1)",
-            )
-            .bind(&workspace_name)
-            .fetch_one(&pool)
-            .await
-            .map_err(WorkspaceError::DatabaseError)?;
-            if !exists.0 {
-                return Err(WorkspaceError::NotFound(workspace_name.clone()));
-            }
-
-            let agent_id = uuid::Uuid::new_v4();
-
-            // 2. 写入 PostgreSQL（部分参数）
-            sqlx::query(
-                r#"
-                INSERT INTO agents (id, name, kind, workspace_name)
-                VALUES ($1, $2, $3, $4)
-                "#,
-            )
-            .bind(agent_id)
-            .bind(&name)
-            .bind(kind.as_db_str())
-            .bind(&workspace_name)
-            .execute(&pool)
-            .await
-            .map_err(WorkspaceError::DatabaseError)?;
-
-            // 3. 在工作区中创建 agents/<agent_id>/ 与 agents/<agent_id>/memory/（记忆存此处）
-            let adir = agent_dir(&workspace_name, agent_id);
-            let mem_dir = agent_memory_dir(&workspace_name, agent_id);
-            ensure_dir(&adir).map_err(WorkspaceError::IoError)?;
-            ensure_dir(&mem_dir).map_err(WorkspaceError::IoError)?;
-
-            let info = AgentInfo::new(agent_id, name, kind, workspace_name);
-            Ok(info)
-        };
-
-        Box::pin(actix::fut::wrap_future(fut))
     }
 }

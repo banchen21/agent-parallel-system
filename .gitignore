@@ -3,7 +3,9 @@
 
 # 环境变量文件
 .env
-
 # 日志文件
 logs/
 run.log
+
+# 屏蔽config文件夹
+/config

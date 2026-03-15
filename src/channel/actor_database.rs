@@ -90,6 +90,8 @@ impl DatabaseManager {
                 name VARCHAR(255) NOT NULL,
                 kind VARCHAR(50) NOT NULL DEFAULT 'general',
                 workspace_name VARCHAR(255) NOT NULL,
+                owner_username  VARCHAR(50) NOT NULL,
+                mcp_list TEXT[] NOT NULL DEFAULT '{}',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT fk_agents_workspace FOREIGN KEY (workspace_name) REFERENCES workspaces(name) ON DELETE CASCADE
             );

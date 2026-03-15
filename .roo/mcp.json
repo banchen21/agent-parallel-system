@@ -23,7 +23,10 @@
 				"PG_USER": "postgres",
 				"PG_PASSWORD": "password",
 				"PG_DATABASE": "agent_system"
-			}
+			},
+			"alwaysAllow": [
+				"list_tables"
+			]
 		}
 	}
 }
