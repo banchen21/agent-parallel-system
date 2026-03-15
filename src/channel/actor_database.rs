@@ -82,6 +82,30 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
+        // 创建 agents 表（参数存 DB，记忆存工作区目录）
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS agents (
+                id UUID PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                kind VARCHAR(50) NOT NULL DEFAULT 'general',
+                workspace_name VARCHAR(255) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_agents_workspace FOREIGN KEY (workspace_name) REFERENCES workspaces(name) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_agents_workspace_name ON agents (workspace_name);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // 设置时区
         sqlx::query(
             r#"

@@ -3,8 +3,6 @@ use uuid::Uuid;
 
 use serde_json::Value;
 
-
-
 /// 消息分类响应结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageClassificationResponse {
@@ -47,35 +45,42 @@ pub struct TaskItem {
     /// 任务截止时间
     #[serde(rename = "due_date")]
     pub due_date: Option<String>,
-
-    /// 任务标签
-    #[serde(rename = "tags")]
-    pub tags: Option<Vec<String>>,
-
-    /// 额外属性（用于扩展）
-    #[serde(flatten)]
-    pub extra: std::collections::HashMap<String, Value>,
 }
 
 /// 任务优先级枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskPriority {
+    /// 低
     Low,
+    /// 中
     Medium,
+    /// 高
     High,
+    /// 紧急
     Critical,
 }
 
 /// 任务状态枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
-    Pending,
-    InProgress,
-    Completed,
+    /// 任务已注册并质押奖励，等待接取
+    Published,
+    /// 已被一个或多个 Agent 认领，处于准备或执行阶段
+    Accepted,
+    /// Agent 正在实际执行任务
+    Executing,
+    /// Agent 已提交结果，等待审阅
+    Submitted,
+    /// 审阅者正在评估结果
+    Reviewing,
+    /// 审阅通过，奖励已分配
+    CompletedSuccess,
+    /// 审阅未通过或超时，任务关闭，可能触发惩罚
+    CompletedFailure,
+    /// 任务发布者在接取前取消任务
     Cancelled,
-    Blocked,
 }
 
 impl MessageClassificationResponse {

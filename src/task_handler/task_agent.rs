@@ -10,6 +10,7 @@ use tracing::{debug, error};
 use crate::chat::actor_messages::ResultMessage;
 use crate::chat::model::MessageContent;
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
+use crate::task_handler::actor_task::{DagOrchestrator, SubmitTask};
 use crate::task_handler::task_model::MessageClassificationResponse;
 use crate::utils::json_util::clean_json_string;
 use crate::workspace::workspace_actor::WorkspaceManageActor;
@@ -19,8 +20,9 @@ use crate::workspace::workspace_actor::WorkspaceManageActor;
 pub struct TaskAgent {
     // 工作区
     workspaces: Addr<WorkspaceManageActor>,
+    dag_orchestrator: Addr<DagOrchestrator>,
     open_aiproxy_actor: Addr<OpenAIProxyActor>,
-    prompt: String, // 提示词
+    prompt: String,
 }
 
 impl Actor for TaskAgent {
@@ -30,11 +32,13 @@ impl Actor for TaskAgent {
 impl TaskAgent {
     pub fn new(
         open_aiproxy_actor: Addr<OpenAIProxyActor>,
+        dag_orchestrator: Addr<DagOrchestrator>,
         workspaces: Addr<WorkspaceManageActor>,
         prompt: String,
     ) -> Self {
         Self {
             open_aiproxy_actor,
+            dag_orchestrator,
             workspaces,
             prompt,
         }
@@ -61,13 +65,20 @@ impl TaskAgent {
         content: String,
     ) -> Result<MessageClassificationResponse, ChatAgentError> {
         match MessageClassificationResponse::from_json(clean_json_string(&content)) {
-            Ok(classification) => Ok(classification),
+            Ok(message_classification_response) => {
+                if message_classification_response.has_tasks() {
+                    for task in message_classification_response.tasks.as_ref().unwrap() {
+                        // 任务上传
+                        let _ = self
+                            .dag_orchestrator
+                            .send(SubmitTask { task: task.clone() })
+                            .await;
+                    }
+                }
+                Ok(message_classification_response)
+            }
             Err(e) => {
                 error!("解析失败: {}, 原始内容: {}", e, content);
-
-                
-
-                // 重试逻辑
                 Err(ChatAgentError::SerializationError(e))
             }
         }
@@ -134,6 +145,7 @@ impl Clone for TaskAgent {
     fn clone(&self) -> Self {
         Self {
             open_aiproxy_actor: self.open_aiproxy_actor.clone(),
+            dag_orchestrator: self.dag_orchestrator.clone(),
             workspaces: self.workspaces.clone(),
             prompt: self.prompt.clone(),
         }

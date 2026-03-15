@@ -33,6 +33,7 @@ use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
 use crate::graph_memory::actor_memory::AgentMemoryActor;
+use crate::task_handler::actor_task::DagOrchestrator;
 use crate::task_handler::task_agent::TaskAgent;
 use crate::utils::database_util::ensure_database_exists;
 use crate::utils::env_util::env_var_or_default;
@@ -135,10 +136,14 @@ async fn main() -> Result<()> {
     // 初始化工作区
     let workspace_actor = WorkspaceManageActor::new(pool.clone()).start();
 
+    // 任务管理
+    let dag_orchestrator: actix::Addr<DagOrchestrator>=DagOrchestrator::new().start();
+
     // 初始化任务Agent
     let task_agent_prompt = config.task_agent.prompt.clone();
     let task_agent = TaskAgent::new(
         open_aiproxy_actor.clone(),
+        dag_orchestrator.clone(),
         workspace_actor.clone(),
         task_agent_prompt,
     )
@@ -227,8 +232,8 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .wrap(Auth) // 只对 /api/v1 下的路由生效
             // 系统资源监控
             .service(get_stats_handler)
-            // 聊天相关接口
-            .service(chat::handler::handle_message)
+            // 聊天：WebSocket 消息 + HTTP 历史
+            .service(chat::handler::ws_message)
             .service(chat::handler::get_message_history)
             // 工作空间
             .service(workspace::handler::get_workspace_handler)

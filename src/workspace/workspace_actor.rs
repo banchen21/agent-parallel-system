@@ -3,9 +3,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
-use thiserror::Error;
 use tracing::info;
 
+use crate::task_handler::agents::{AgentInfo, AgentKind};
+use crate::utils::workspace_path::{
+    agent_memory_dir, agent_dir, ensure_dir, workspace_agents_dir, workspace_dir,
+};
 use crate::workspace::model::WorkspaceError;
 
 // ==================== Manage Actor 定义 ====================
@@ -59,6 +62,9 @@ impl Actor for WorkspaceManageActor {
             actix::fut::wrap_future(fut).map(|result, actor: &mut Self, _ctx| {
                 if let Ok(workspaces) = result {
                     for ws in workspaces {
+                        let ws_dir = workspace_dir(&ws.name);
+                        let agents_dir = workspace_agents_dir(&ws.name);
+                        let _ = ensure_dir(&ws_dir).and_then(|_| ensure_dir(&agents_dir));
                         let addr = WorkspaceActor::new(actor.pool.clone(), ws.name.clone()).start();
                         actor.workspaces.insert(ws.name, addr);
                     }
@@ -127,7 +133,16 @@ impl Handler<CreateWorkspace> for WorkspaceManageActor {
         Box::pin(
             actix::fut::wrap_future(fut).map(move |res, actor: &mut Self, _ctx| match res {
                 Ok(workspace_info) => {
-                    // 【修复 1 附属】创建时如果不存在则启动一个新的子 Actor 进行管理
+                    // 在工作区根目录下创建 .workspace/<name>/ 与 .workspace/<name>/agents/
+                    let ws_dir = workspace_dir(&name_clone);
+                    let agents_dir = workspace_agents_dir(&name_clone);
+                    if let Err(e) = ensure_dir(&ws_dir).and_then(|_| ensure_dir(&agents_dir)) {
+                        tracing::warn!(
+                            workspace = %name_clone,
+                            error = %e,
+                            "创建工作区目录失败（数据库已创建）"
+                        );
+                    }
                     if !actor.workspaces.contains_key(&name_clone) {
                         let addr =
                             WorkspaceActor::new(actor.pool.clone(), name_clone.clone()).start();
@@ -206,5 +221,67 @@ impl Handler<GetWorkspaces> for WorkspaceManageActor {
         };
 
         Box::pin(actix::fut::wrap_future::<_, Self>(fut))
+    }
+}
+
+// ---------- 创建 Agent：参数存 PostgreSQL，记忆目录建在工作区 .workspace/<name>/agents/<id>/ ----------
+#[derive(Message)]
+#[rtype(result = "Result<AgentInfo, WorkspaceError>")]
+pub struct CreateAgent {
+    pub name: String,
+    pub kind: AgentKind,
+    pub workspace_name: String,
+}
+
+impl Handler<CreateAgent> for WorkspaceManageActor {
+    type Result = ResponseActFuture<Self, Result<AgentInfo, WorkspaceError>>;
+
+    fn handle(&mut self, msg: CreateAgent, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+        let name = msg.name;
+        let kind = msg.kind;
+        let workspace_name = msg.workspace_name;
+
+        let fut = async move {
+            // 1. 检查工作区是否存在
+            let exists: (bool,) = sqlx::query_as(
+                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE name = $1)",
+            )
+            .bind(&workspace_name)
+            .fetch_one(&pool)
+            .await
+            .map_err(WorkspaceError::DatabaseError)?;
+            if !exists.0 {
+                return Err(WorkspaceError::NotFound(workspace_name.clone()));
+            }
+
+            let agent_id = uuid::Uuid::new_v4();
+
+            // 2. 写入 PostgreSQL（部分参数）
+            sqlx::query(
+                r#"
+                INSERT INTO agents (id, name, kind, workspace_name)
+                VALUES ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(agent_id)
+            .bind(&name)
+            .bind(kind.as_db_str())
+            .bind(&workspace_name)
+            .execute(&pool)
+            .await
+            .map_err(WorkspaceError::DatabaseError)?;
+
+            // 3. 在工作区中创建 agents/<agent_id>/ 与 agents/<agent_id>/memory/（记忆存此处）
+            let adir = agent_dir(&workspace_name, agent_id);
+            let mem_dir = agent_memory_dir(&workspace_name, agent_id);
+            ensure_dir(&adir).map_err(WorkspaceError::IoError)?;
+            ensure_dir(&mem_dir).map_err(WorkspaceError::IoError)?;
+
+            let info = AgentInfo::new(agent_id, name, kind, workspace_name);
+            Ok(info)
+        };
+
+        Box::pin(actix::fut::wrap_future(fut))
     }
 }
