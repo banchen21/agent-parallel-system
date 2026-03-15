@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use serde_json::Value;
-
 /// 消息分类响应结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageClassificationResponse {
@@ -23,15 +21,19 @@ pub struct MessageClassificationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskItem {
     /// 任务ID
-    #[serde(rename = "id")]
+    #[serde(rename = "id", alias = "task_id")]
     pub id: Option<String>,
 
+    /// 任务节点键（用于 DAG 节点关联，未提供时默认使用 id 或自动生成）
+    #[serde(rename = "task_key")]
+    pub task_key: Option<String>,
+
     /// 任务名称
-    #[serde(rename = "name")]
+    #[serde(rename = "name", alias = "task")]
     pub name: Option<String>,
 
     /// 任务描述
-    #[serde(rename = "description")]
+    #[serde(rename = "description", alias = "task_description")]
     pub description: Option<String>,
 
     /// 任务优先级
@@ -45,6 +47,14 @@ pub struct TaskItem {
     /// 任务截止时间
     #[serde(rename = "due_date")]
     pub due_date: Option<String>,
+
+    /// DAG 依赖节点（仅当这些节点完成后当前任务才可执行）
+    #[serde(rename = "depends_on")]
+    pub depends_on: Option<Vec<String>>,
+
+    /// 执行该任务需要的 MCP 名称列表
+    #[serde(rename = "required_mcp")]
+    pub required_mcp: Option<Vec<String>>,
 }
 
 /// 任务优先级枚举
@@ -52,12 +62,16 @@ pub struct TaskItem {
 #[serde(rename_all = "lowercase")]
 pub enum TaskPriority {
     /// 低
+    #[serde(alias = "Low", alias = "LOW")]
     Low,
     /// 中
+    #[serde(alias = "Medium", alias = "MEDIUM", alias = "Normal", alias = "NORMAL", alias = "normal")]
     Medium,
     /// 高
+    #[serde(alias = "High", alias = "HIGH")]
     High,
     /// 紧急
+    #[serde(alias = "Critical", alias = "CRITICAL")]
     Critical,
 }
 

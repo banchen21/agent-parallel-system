@@ -115,7 +115,7 @@ impl Handler<GetMessages> for ChannelManagerActor {
                 r#"
                 SELECT "user", source_ip, device_type, content, created_at 
                 FROM messages 
-                WHERE "user" IN ($1, $2)
+                                WHERE ("user" IN ($1, $2) OR "user" = '任务系统')
                   AND ($3::timestamptz IS NULL OR created_at < $3)
                 ORDER BY created_at DESC 
                 LIMIT $4

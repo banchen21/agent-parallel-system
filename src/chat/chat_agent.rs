@@ -231,6 +231,8 @@ impl Handler<OtherUserMessage> for ChatAgent {
                     ],
                     tools: None,
                     tool_choice: None,
+                    provider: None,
+                    model: None,
                 })
                 .await
                 .map_err(ChatAgentError::from)??;

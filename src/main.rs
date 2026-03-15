@@ -2,11 +2,10 @@ use actix_cors::Cors;
 use actix_web::http::header;
 use actix_web::{App, HttpServer, web};
 use anyhow::Result;
-use async_openai::config::OpenAIConfig;
 use dotenv::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 mod channel;
 mod core;
@@ -35,13 +34,16 @@ use crate::api::auth::Auth;
 use crate::channel::actor_database::DatabaseManager;
 use crate::chat::actor_messages::ChannelManagerActor;
 use crate::chat::chat_agent::ChatAgent;
-use crate::chat::openai_actor::OpenAIProxyActor;
+use crate::chat::openai_actor::{OpenAIProxyActor, ProviderConfig};
 use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
 use crate::graph_memory::actor_memory::AgentMemoryActor;
-use crate::task_handler::actor_task::DagOrchestrator;
+use crate::task_handler::actor_task::{
+    BindAgentManager, BindChannelManager, BindMcpManager, BindTaskNotifyQueue, DagOrchestrator,
+};
 use crate::task_handler::task_agent::TaskAgent;
+use crate::task_handler::task_notify_queue::TaskNotifyQueueActor;
 use crate::utils::database_util::ensure_database_exists;
 use crate::utils::env_util::env_var_or_default;
 use crate::workspace::workspace_actor::WorkspaceManageActor;
@@ -73,19 +75,52 @@ async fn main() -> Result<()> {
     // 系统监控
     let sys_monitor_actor = SysMonitorActor::new().start();
 
-    // OpenAi 并行处理层
-    let mut openai_config = OpenAIConfig::default();
-    let api_base = std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "null".to_string());
-    openai_config = openai_config.with_api_base(api_base);
-    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "null".to_string());
-    openai_config = openai_config.with_api_key(api_key);
+    let config = CONFIG.clone();
 
-    let model = env_var_or_default("OPENAI_MODEL", "gpt-3.5-turbo".to_string());
-    let timeout_secs = env_var_or_default("OPENAI_TIMEOUT_SECONDS", 60u64);
-    let max_tokens = env_var_or_default("OPENAI_MAX_TOKENS", 2048u32);
+    // OpenAI 并行处理层（从 config/default.toml 的 [[providers]] 加载，支持多代理商）
+    let timeout_secs = config.llm.timeout_secs;
+    let max_tokens = config.llm.max_tokens;
 
-    let open_aiproxy_actor =
-        OpenAIProxyActor::new(openai_config, model, timeout_secs, max_tokens).start();
+    // 若 TOML 中未配置 [[providers]]，则回退到旧的单一 OPENAI_* 环境变量
+    let open_aiproxy_actor = if config.providers.is_empty() {
+        warn!("config/default.toml 中未配置 [[providers]]，回退到 OPENAI_* 环境变量");
+        let fallback = ProviderConfig::new(
+            env_var_or_default("OPENAI_PROVIDER_NAME", "default".to_string()),
+            env_var_or_default("OPENAI_API_KEY", "null".to_string()),
+            env_var_or_default("OPENAI_BASE_URL", "https://api.openai.com/v1".to_string()),
+            env_var_or_default("OPENAI_MODEL", "gpt-3.5-turbo".to_string()),
+        );
+        OpenAIProxyActor::new(fallback, timeout_secs, max_tokens).start()
+    } else {
+        // 从配置构建代理商列表；api_key 优先读取环境变量 PROVIDER_{NAME大写}_API_KEY
+        let build_provider = |item: &crate::core::config::ProviderItem| {
+            let key_env = format!("PROVIDER_{}_API_KEY", item.name.to_uppercase());
+            let api_key = env::var(&key_env).unwrap_or_else(|_| item.api_key.clone());
+            info!("加载代理商: {} (model={})", item.name, item.default_model);
+            ProviderConfig::new(&item.name, api_key, &item.base_url, &item.default_model)
+        };
+
+        let mut iter = config.providers.iter();
+        // 确定默认代理商：若 llm.default_provider 非空则以其为准，否则用第一个
+        let default_name = if config.llm.default_provider.is_empty() {
+            config.providers[0].name.clone()
+        } else {
+            config.llm.default_provider.clone()
+        };
+        // 优先把 default_provider 放在最前面（作为 new() 的入参）
+        let default_item = config
+            .providers
+            .iter()
+            .find(|p| p.name == default_name)
+            .unwrap_or(&config.providers[0]);
+
+        let mut proxy =
+            OpenAIProxyActor::new(build_provider(default_item), timeout_secs, max_tokens);
+        for item in config.providers.iter().filter(|p| p.name != default_item.name) {
+            proxy = proxy.with_provider(build_provider(item));
+        }
+        proxy.start()
+    };
 
     // postgresql
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
@@ -102,14 +137,12 @@ async fn main() -> Result<()> {
         .await?;
     info!("PostgreSQL 连接成功");
 
-    let config = CONFIG.clone();
-
     // neo4j 图数据库+智能记忆管理体
     let agent_memory_prompt = config.memory_agent.clone();
     let enable_memory_query = config.features.enable_memory_query;
     let neo4j_uri = env_var_or_default("NEO4J_URI", "127.0.0.1:7687".to_string());
     let neo4j_user = env_var_or_default("NEO4J_USERNAME", "neo4j".to_string());
-    let neo4j_pass = env_var_or_default("NEO4J_PASSWORD", "neo4j".to_string());
+    let neo4j_pass = env_var_or_default("NEO4J_PASSWORD", "Neo4j123456".to_string());
 
     let agent_memory_hactor = AgentMemoryActor::new(
         &neo4j_uri,
@@ -143,11 +176,33 @@ async fn main() -> Result<()> {
     // 初始化工作区
     let workspace_actor = WorkspaceManageActor::new(pool.clone()).start();
 
+    // MCP 管理器
+    let mcp_manager = McpManagerActor::new().start();
+
     // 任务管理
-    let dag_orchestrator: actix::Addr<DagOrchestrator> = DagOrchestrator::new().start();
+    let dag_orchestrator: actix::Addr<DagOrchestrator> = DagOrchestrator::new(pool.clone()).start();
+    let task_notify_queue = TaskNotifyQueueActor::new().start();
 
     //AgentActor
-    let agents_actor = AgentManageActor::new(pool.clone(),open_aiproxy_actor.clone()).start();
+    let agents_actor = AgentManageActor::new(
+        pool.clone(),
+        open_aiproxy_actor.clone(),
+        mcp_manager.clone(),
+        dag_orchestrator.clone(),
+    )
+    .start();
+    dag_orchestrator.do_send(BindAgentManager {
+        agent_manager: agents_actor.clone(),
+    });
+    dag_orchestrator.do_send(BindMcpManager {
+        mcp_manager: mcp_manager.clone(),
+    });
+    dag_orchestrator.do_send(BindChannelManager {
+        channel_manager: channel_manager.clone(),
+    });
+    dag_orchestrator.do_send(BindTaskNotifyQueue {
+        task_notify_queue: task_notify_queue.clone(),
+    });
 
     // 初始化任务Agent
     let task_agent_prompt = config.task_agent.prompt.clone();
@@ -205,14 +260,17 @@ async fn main() -> Result<()> {
         App::new()
             .wrap(cors)
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(dag_orchestrator.clone()))
             .app_data(web::Data::new(agents_actor.clone()))
             .app_data(web::Data::new(agent_memory_hactor_addr.clone()))
             .app_data(web::Data::new(channel_manager.clone()))
+            .app_data(web::Data::new(task_notify_queue.clone()))
             .app_data(web::Data::new(user_manager.clone()))
             .app_data(web::Data::new(redis_addr.clone()))
             .app_data(web::Data::new(chat_agent.clone()))
             .app_data(web::Data::new(sys_monitor_actor.clone()))
             .app_data(web::Data::new(workspace_actor.clone()))
+                .app_data(web::Data::new(mcp_manager.clone()))
             .app_data(web::Data::new(config.clone()))
             .configure(configure_api_routes)
     })
@@ -229,6 +287,9 @@ async fn main() -> Result<()> {
 }
 
 fn configure_api_routes(cfg: &mut web::ServiceConfig) {
+    // --- 0. WebSocket（不经过 Auth 中间件，通过 URL 参数 token 自行验证）---
+    cfg.service(chat::ws_handler::ws_chat_handler);
+
     // --- 1. 公开作用域：完全没有 wrap(Auth) ---
     cfg.service(
         web::scope("/auth")
@@ -243,15 +304,24 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .wrap(Auth) // 只对 /api/v1 下的路由生效
             // 系统资源监控
             .service(get_stats_handler)
-            // 聊天：WebSocket 消息 + HTTP 历史
-            .service(chat::handler::handle_message)
+            // 聊天：HTTP 历史记录（发送消息已改为 WS 长连接）
             .service(chat::handler::get_message_history)
             // 工作空间
             .service(workspace::handler::get_workspace_handler)
             .service(workspace::handler::create_workspac_handler)
             .service(workspace::handler::delete_workspace_handler)
+            // 任务
+            .service(task_handler::handler::list_tasks_handler)
+            .service(task_handler::handler::get_task_handler)
+            .service(task_handler::handler::create_task_handler)
             // 智能体
+            .service(agsnets::handler::list_agents_handler)
             .service(agsnets::handler::create_agent_handler)
+            .service(agsnets::handler::get_agent_handler)
+            .service(agsnets::handler::delete_agent_handler)
+            .service(agsnets::handler::get_agent_status_handler)
+            .service(agsnets::handler::list_agent_statuses_handler)
+            .service(agsnets::handler::update_agent_status_handler)
             // MCP 配置管理
             .service(mcp::handler::add_mcp_handler)
             .service(mcp::handler::delete_mcp_handler)

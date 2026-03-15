@@ -133,6 +133,8 @@ impl Handler<OtherMessage> for TaskAgent {
                     ],
                     tools: None,
                     tool_choice: None,
+                    provider: None,
+                    model: None,
                 })
                 .await
                 .map_err(ChatAgentError::from)??;

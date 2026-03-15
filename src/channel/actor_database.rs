@@ -108,6 +108,34 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
+        // 创建 tasks 表（任务状态持久化）
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tasks (
+                id UUID PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                priority VARCHAR(20),
+                status VARCHAR(50) NOT NULL DEFAULT 'published',
+                due_date TEXT,
+                assigned_agent_id UUID,
+                assigned_agent_name VARCHAR(255),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks (status, created_at DESC);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // 设置时区
         sqlx::query(
             r#"

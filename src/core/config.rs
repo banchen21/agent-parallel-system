@@ -15,6 +15,9 @@ pub struct Settings {
     pub chat_agent: ChatAgentConfig,
     pub memory_agent: MemoryAgentConfig,
     pub task_agent: TaskAgentConfig,
+    pub llm: LlmConfig,
+    #[serde(default)]
+    pub providers: Vec<ProviderItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +47,30 @@ pub struct TaskAgentConfig {
     pub prompt: String,
 }
 
+/// 单个代理商的静态配置（对应 TOML 中的 [[providers]]）
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderItem {
+    /// 代理商唯一名称，例如 "deepseek"、"openai"、"ollama"
+    pub name: String,
+    /// OpenAI 兼容接口的 base URL
+    pub base_url: String,
+    /// 该代理商的默认模型
+    pub default_model: String,
+    /// API Key（可留空，优先从环境变量 PROVIDER_{NAME大写}_API_KEY 读取）
+    #[serde(default)]
+    pub api_key: String,
+}
+
+/// LLM 全局参数
+#[derive(Debug, Clone, Deserialize)]
+pub struct LlmConfig {
+    /// 默认代理商名称；留空则使用 [[providers]] 第一项
+    #[serde(default)]
+    pub default_provider: String,
+    pub timeout_secs: u64,
+    pub max_tokens: u32,
+}
+
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         let default_config_path = "config/default.toml";
@@ -66,6 +93,9 @@ impl Settings {
             .set_default("memory_agent.prompt_summary", r#""#)?
             // 从配置文件加载
             .set_default("task_agent.prompt", r#""#)?
+            .set_default("llm.default_provider", "")?
+            .set_default("llm.timeout_secs", 60i64)?
+            .set_default("llm.max_tokens", 2048i64)?
             .add_source(File::with_name(default_config_path).required(true))
             // 从.env文件加载
             .add_source(

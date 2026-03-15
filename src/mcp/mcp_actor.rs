@@ -2,6 +2,8 @@ use actix::{Actor, ActorFutureExt, Context, Handler, Message, ResponseActFuture}
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 use tracing::{error, info};
 
 use crate::mcp::model::{McpConfig, McpConfigList, McpError};
@@ -12,6 +14,13 @@ pub struct McpManagerActor {
     mcps_dir: PathBuf,
     /// 内存中的 MCP 配置列表
     mcp_list: McpConfigList,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpExecutionResult {
+    pub name: String,
+    pub success: bool,
+    pub output: String,
 }
 
 impl McpManagerActor {
@@ -232,6 +241,88 @@ impl Handler<ListMcpConfigs> for McpManagerActor {
         
         Box::pin(actix::fut::wrap_future(async move { Ok(configs) }).map(
             |res: Result<Vec<McpConfig>, McpError>, _actor: &mut Self, _ctx| res,
+        ))
+    }
+}
+
+/// 执行 MCP 工具（按配置命令拉起子进程）
+#[derive(Message, Clone, Deserialize, Serialize)]
+#[rtype(result = "Result<McpExecutionResult, McpError>")]
+pub struct ExecuteMcpTool {
+    pub name: String,
+    #[serde(default)]
+    pub input: String,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+fn default_timeout_secs() -> u64 {
+    30
+}
+
+impl Handler<ExecuteMcpTool> for McpManagerActor {
+    type Result = ResponseActFuture<Self, Result<McpExecutionResult, McpError>>;
+
+    fn handle(&mut self, msg: ExecuteMcpTool, _ctx: &mut Self::Context) -> Self::Result {
+        let config = match self.mcp_list.get(&msg.name) {
+            Some(c) => c.clone(),
+            None => {
+                let err = McpError::NotFound(msg.name);
+                return Box::pin(actix::fut::wrap_future(async move { Err(err) }).map(
+                    |res: Result<McpExecutionResult, McpError>, _actor: &mut Self, _ctx| res,
+                ));
+            }
+        };
+
+        let input = msg.input;
+        let timeout_secs = msg.timeout_secs;
+
+        let fut = async move {
+            let mut cmd = Command::new(&config.command);
+
+            // 支持在 args 中使用 {input} 占位符，不存在占位符时把输入附加到最后
+            let mut used_placeholder = false;
+            for arg in &config.args {
+                if arg.contains("{input}") {
+                    used_placeholder = true;
+                    cmd.arg(arg.replace("{input}", &input));
+                } else {
+                    cmd.arg(arg);
+                }
+            }
+
+            if !input.is_empty() && !used_placeholder {
+                cmd.arg(&input);
+            }
+
+            for (k, v) in &config.env {
+                cmd.env(k, v);
+            }
+
+            let out = timeout(Duration::from_secs(timeout_secs), cmd.output())
+                .await
+                .map_err(|_| McpError::Message(format!("执行超时: {}s", timeout_secs)))?
+                .map_err(|e| McpError::Message(format!("执行失败: {}", e)))?;
+
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let merged = if stderr.is_empty() {
+                stdout
+            } else if stdout.is_empty() {
+                stderr
+            } else {
+                format!("{}\n{}", stdout, stderr)
+            };
+
+            Ok(McpExecutionResult {
+                name: config.name,
+                success: out.status.success(),
+                output: merged,
+            })
+        };
+
+        Box::pin(actix::fut::wrap_future(fut).map(
+            |res: Result<McpExecutionResult, McpError>, _actor: &mut Self, _ctx| res,
         ))
     }
 }

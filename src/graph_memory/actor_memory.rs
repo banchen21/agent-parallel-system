@@ -117,6 +117,8 @@ impl AgentMemoryActor {
                 )],
                 tools: None,
                 tool_choice: None,
+                provider: None,
+                model: None,
             })
             .await
             .map_err(|e| anyhow!("Mailbox Error: {}", e))??; // 第一层是 Actor 错误，第二层是 OpenAI 业务错误
@@ -226,6 +228,8 @@ impl Handler<QueryMemory> for AgentMemoryActor {
                             ],
                             tools: None,
                             tool_choice: None,
+                            provider: None,
+                            model: None,
                         })
                         .await
                         .map_err(ChatAgentError::from)??;
@@ -284,6 +288,8 @@ impl Handler<UpdateMemory> for AgentMemoryActor {
                         )],
                         tools: None,
                         tool_choice: None,
+                        provider: None,
+                        model: None,
                     })
                     .await
                     .map_err(ChatAgentError::from)??;
