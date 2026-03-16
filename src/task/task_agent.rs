@@ -7,11 +7,11 @@ use async_openai::types::chat::{
 };
 use tracing::{debug, error};
 
-use crate::chat::actor_messages::ResultMessage;
+use crate::channel::actor_messages::ResultMessage;
 use crate::chat::model::MessageContent;
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
-use crate::task_handler::actor_task::{DagOrchestrator, SubmitTask};
-use crate::task_handler::task_model::MessageClassificationResponse;
+use crate::task::dag_orchestrator::{DagOrchestrator, SubmitTask};
+use crate::task::model::MessageClassificationResponse;
 use crate::utils::json_util::clean_json_string;
 use crate::workspace::workspace_actor::WorkspaceManageActor;
 
@@ -62,6 +62,7 @@ impl TaskAgent {
     /// 处理分类响应
     async fn handle_classification(
         &self,
+        user_name: String,
         content: String,
     ) -> Result<MessageClassificationResponse, ChatAgentError> {
         match MessageClassificationResponse::from_json(clean_json_string(&content)) {
@@ -69,10 +70,17 @@ impl TaskAgent {
                 if message_classification_response.has_tasks() {
                     for task in message_classification_response.tasks.as_ref().unwrap() {
                         // 任务上传
-                        let _ = self
+                        match self
                             .dag_orchestrator
-                            .send(SubmitTask { task: task.clone() })
-                            .await;
+                            .send(SubmitTask {
+                                user_name: user_name.clone(),
+                                task: task.clone(),
+                            })
+                            .await
+                        {
+                            Ok(_) => debug!("任务提交成功: {:?}", task),
+                            Err(e) => error!("任务提交失败: {}, 任务内容: {:?}", e, task),
+                        }
                     }
                 }
                 Ok(message_classification_response)
@@ -95,6 +103,7 @@ pub struct OtherMessage {
     pub short_term_memory: Vec<ResultMessage>,
     // 用户内容
     pub user_content: MessageContent,
+    pub user_name: String,
 }
 
 /// 简化的异步Handler实现
@@ -104,13 +113,15 @@ impl Handler<OtherMessage> for TaskAgent {
     fn handle(&mut self, msg: OtherMessage, _ctx: &mut Self::Context) -> Self::Result {
         let this = self.clone();
 
+
         Box::pin(async move {
             // 1. 获取长期记忆
             let long_term_memory = msg.long_term_memory;
             // 2. 获取短期记忆
             let short_term_memory = msg.short_term_memory;
-            // 4. 获取用户内容
+            // 3. 获取用户内容
             let user_content: MessageContent = msg.user_content;
+            let user_name = msg.user_name;
 
             // 提示词构建
             let prompt = this.build_prompt(&long_term_memory, short_term_memory);
@@ -125,7 +136,7 @@ impl Handler<OtherMessage> for TaskAgent {
                             name: None,
                         }),
                         ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-                            name: None,
+                            name: Some(user_name.clone()),
                             content: ChatCompletionRequestUserMessageContent::Text(
                                 user_content.to_string(),
                             ),
@@ -138,7 +149,7 @@ impl Handler<OtherMessage> for TaskAgent {
                 })
                 .await
                 .map_err(ChatAgentError::from)??;
-            this.handle_classification(response_text).await
+            this.handle_classification(user_name, response_text).await
         })
     }
 }

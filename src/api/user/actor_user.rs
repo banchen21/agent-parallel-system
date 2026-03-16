@@ -39,8 +39,6 @@ impl Handler<CreateUser> for UserManagerActor {
     fn handle(&mut self, msg: CreateUser, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
 
-        debug!("🏗️ 开始创建用户: {:#?}", msg);
-
         Box::pin(async move {
 
             let user = sqlx::query_as::<_, User>(

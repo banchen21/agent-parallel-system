@@ -1,10 +1,10 @@
 // HTTP 处理函数
 use super::model::UserMessage;
-use crate::ChannelManagerActor;
-use crate::chat::actor_messages::{GetMessages, SaveMessage};
+use crate::channel::actor_messages::{ChannelManagerActor, GetMessages, SaveMessage};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::MessageContent;
 use crate::graph_memory::actor_memory::{AgentMemoryActor, GetMyName};
+use crate::utils::handler_util::get_user_name;
 use actix::Addr;
 use actix_web::{HttpRequest, HttpResponse, Result as ActixResult, get, post, web};
 use chrono::{DateTime, Local, Utc};
@@ -14,7 +14,6 @@ use tracing::{debug, error, warn};
 // 请求结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
-    pub user: String,
     pub device_type: String,
     pub content: MessageContent,
     pub created_at: DateTime<Utc>,
@@ -37,9 +36,15 @@ pub async fn handle_message(
         .unwrap_or_else(|| "unknown".to_string());
 
     let chat_request = chat_request.clone();
+    let user_name = match get_user_name(&req) {
+        Ok(name) => name,
+        Err(resp) => {
+            return Ok(resp);
+        }
+    };
     // 构造 UserMessage
     let user_message = UserMessage {
-        sender: chat_request.user,
+        sender: user_name,
         source_ip: client_ip,
         device_type: chat_request.device_type,
         content: chat_request.content,
@@ -56,8 +61,8 @@ pub async fn handle_message(
 
     match chat_agent_response {
         Ok(Ok(agent_response)) => {
-            // 保存ai消息到数据库
             let db_save_start = std::time::Instant::now();
+            // 保存用户消息到数据库
             let save_message = SaveMessage {
                 message: user_message.clone(),
             };
@@ -79,6 +84,7 @@ pub async fn handle_message(
                 }
             }
             for message in agent_response.content.iter().cloned() {
+                // 保存ai消息到数据库
                 let save_message = SaveMessage {
                     message: UserMessage {
                         sender: ai_name.clone(),

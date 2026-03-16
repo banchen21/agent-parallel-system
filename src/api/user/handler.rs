@@ -1,7 +1,9 @@
+use crate::agsnets::actor_agents::{AgentManagerActor, CreateAgent};
 use crate::api::auth_utils::{generate_tokens, validate_token};
 use crate::api::redis_actor::{RedisActor, SaveRefreshToken, VerifyAndConsumeToken};
 use crate::api::user::actor_user::{CreateUser, GetUserByUsername, UserManagerActor};
 use crate::api::user::model::{AuthResponse, LoginRequest, RegisterRequest};
+use crate::workspace::model::AgentKind;
 use actix::Addr;
 use actix_web::{HttpMessage as _, HttpRequest, HttpResponse, Responder, post, web};
 use bcrypt::{DEFAULT_COST, hash, verify};
@@ -12,6 +14,8 @@ use tracing::{debug, error, info};
 #[post("/register")]
 pub async fn register(
     user_manager: web::Data<Addr<UserManagerActor>>,
+    workspace_manage: web::Data<Addr<crate::workspace::workspace_actor::WorkspaceManageActor>>,
+    agent_manager: web::Data<Addr<AgentManagerActor>>,
     req: web::Json<RegisterRequest>,
 ) -> impl Responder {
     // 密码加密
@@ -30,7 +34,52 @@ pub async fn register(
         .await;
 
     match res {
-        Ok(Ok(user)) => HttpResponse::Ok().json(user),
+        Ok(Ok(user)) => {
+            // 尝试为新用户创建一个默认工作区（不阻塞注册流程）
+            let owner = user.username.clone();
+            let mut name: String = owner.chars().filter(|c| c.is_alphabetic()).collect();
+            if name.is_empty() {
+                name = format!("workspace{}", user.id);
+            }
+            let ws_actor = workspace_manage.get_ref().clone();
+            let workspace_name = name.clone() + "_default";
+            let create = crate::workspace::workspace_actor::CreateWorkspace {
+                name: workspace_name.clone(),
+                description: Some("默认工作区".to_string()),
+                owner_username: owner.clone(),
+            };
+            // spawn 不阻塞主流程：先创建工作区，成功后尝试创建一个默认执行型 Agent
+            let agent_addr = agent_manager.get_ref().clone();
+            tokio::spawn(async move {
+                match ws_actor.send(create).await {
+                    Ok(Ok(_)) => {
+                        tracing::info!("Created default workspace for {}: {}", owner, workspace_name);
+                        // 创建默认 Agent（executor）
+                        let agent_req = CreateAgent {
+                            user_name: owner.clone(),
+                            name: format!("executor-{}", owner.clone()),
+                            kind: AgentKind::General,
+                            workspace_name: workspace_name.clone(),
+                            mcp_list: vec![],
+                        };
+
+                        match agent_addr.send(agent_req).await {
+                            Ok(Ok(agent_info)) => tracing::info!(
+                                "Created default agent for {}: {}",
+                                owner,
+                                agent_info.name
+                            ),
+                            Ok(Err(e)) => tracing::warn!("Create default agent failed: {:?}", e),
+                            Err(e) => tracing::warn!("Agent manager mailbox error: {:?}", e),
+                        }
+                    }
+                    Ok(Err(e)) => tracing::warn!("Create default workspace failed: {:?}", e),
+                    Err(e) => tracing::warn!("Workspace actor mailbox error: {:?}", e),
+                }
+            });
+
+            HttpResponse::Ok().json(user)
+        }
         Ok(Err(e)) => HttpResponse::BadRequest().body(e.to_string()),
         Err(_) => HttpResponse::InternalServerError().finish(),
     }

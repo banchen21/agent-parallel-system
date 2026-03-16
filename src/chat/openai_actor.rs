@@ -97,7 +97,6 @@ struct ProviderEntry {
 }
 
 pub struct OpenAIProxyActor {
-    /// provider_name -> (client, default_model)
     providers: HashMap<String, ProviderEntry>,
     default_provider: String,
     max_tokens: u32,
@@ -106,7 +105,6 @@ pub struct OpenAIProxyActor {
 }
 
 impl OpenAIProxyActor {
-    /// 初始化时至少传入一个默认代理商配置
     pub fn new(
         default: ProviderConfig,
         timeout_secs: u64,
@@ -146,30 +144,6 @@ impl OpenAIProxyActor {
 impl Actor for OpenAIProxyActor {
     type Context = Context<Self>;
 }
-
-// ======================== 消息：注册代理商 ========================
-
-/// 运行时注册新代理商
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct RegisterProvider(pub ProviderConfig);
-
-impl Handler<RegisterProvider> for OpenAIProxyActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: RegisterProvider, _: &mut Context<Self>) {
-        let cfg = msg.0;
-        info!("注册代理商: {} (base_url={})", cfg.name, cfg.base_url);
-        self.providers.insert(
-            cfg.name.clone(),
-            ProviderEntry {
-                client: cfg.build_client(),
-                default_model: cfg.default_model,
-            },
-        );
-    }
-}
-
 // ======================== 消息：调用 LLM ========================
 
 #[derive(Message)]

@@ -11,6 +11,7 @@ pub struct Settings {
     pub environment: String,
     pub app_url: String,
     pub limits: LimitsConfig,
+    pub mcp_agent: McpAgentConfig,
     pub features: FeaturesConfig,
     pub chat_agent: ChatAgentConfig,
     pub memory_agent: MemoryAgentConfig,
@@ -18,6 +19,11 @@ pub struct Settings {
     pub llm: LlmConfig,
     #[serde(default)]
     pub providers: Vec<ProviderItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpAgentConfig {
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,7 +93,7 @@ impl Settings {
             // 默认值
             .set_default("limits.chat_history_limit", 10)?
             .set_default("limits.api_history_limit", 20)?
-            .set_default("features.enable_memory_query", true)?
+            .set_default("mcp_agent.prompt", r#""#)?
             .set_default("chat_agent.prompt", r#""#)?
             .set_default("memory_agent.prompt_query", r#""#)?
             .set_default("memory_agent.prompt_summary", r#""#)?

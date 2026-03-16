@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, error, info, warn};
 
-use crate::chat::actor_messages::ResultMessage;
+use crate::channel::actor_messages::ResultMessage;
 use crate::chat::{
     chat_agent::PERSONALITY_PATH,
     model::MessageContent,

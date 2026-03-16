@@ -1,68 +1,67 @@
-use actix::{Actor, ActorFutureExt, Context, Handler, Message, ResponseActFuture};
+use actix::{Actor, ActorFutureExt, Context, Handler, Message, ResponseActFuture, WrapFuture};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::{error, info};
 
-use crate::mcp::model::{McpConfig, McpConfigList, McpError};
+use crate::chat::openai_actor::OpenAIProxyActor;
+use crate::mcp;
+use crate::mcp::model::{McpConfig, McpError};
 
-/// MCP 配置管理 Actor
-pub struct McpManagerActor {
-    /// .mcps 目录路径
-    mcps_dir: PathBuf,
-    /// 内存中的 MCP 配置列表
-    mcp_list: McpConfigList,
+const MCPS_DIR: &str = ".mcps";
+
+pub struct McpAgentActor {
+    open_aiproxy_actor: actix::Addr<OpenAIProxyActor>,
+    mcp_list: HashMap<String, McpConfig>,
+    prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpExecutionResult {
-    pub name: String,
-    pub success: bool,
     pub output: String,
 }
 
-impl McpManagerActor {
-    pub fn new() -> Self {
-        let mcps_dir = PathBuf::from(".mcps");
-        
+impl McpAgentActor {
+    pub fn new(open_aiproxy_actor: actix::Addr<OpenAIProxyActor>, prompt: String) -> Self {
+        let mcp_dir = PathBuf::from(MCPS_DIR);
         // 确保 .mcps 目录存在
-        if let Err(e) = fs::create_dir_all(&mcps_dir) {
+        if let Err(e) = fs::create_dir_all(&mcp_dir) {
             error!("创建 .mcps 目录失败: {}", e);
         } else {
             info!("已确保 .mcps 目录存在");
         }
+        let mcp_list = match Self::load_all_configs(&mcp_dir) {
+            Ok(list) => list,
+            Err(e) => {
+                error!("加载 MCP 配置失败: {}", e);
+                HashMap::new()
+            }
+        };
 
-        // 从 .mcps 目录加载所有配置
-        let mcp_list = Self::load_all_configs(&mcps_dir).unwrap_or_else(|e| {
-            error!("加载 MCP 配置失败: {}", e);
-            McpConfigList::new()
-        });
-
-        Self {
-            mcps_dir,
-            mcp_list,
-        }
+        Self { open_aiproxy_actor, mcp_list, prompt }
     }
 
     /// 从 .mcps 目录加载所有配置
-    fn load_all_configs(mcps_dir: &PathBuf) -> Result<McpConfigList, McpError> {
-        let mut config_list = McpConfigList::new();
-        
-        if !mcps_dir.exists() {
+    fn load_all_configs(mcp_dir: &PathBuf) -> Result<HashMap<String, McpConfig>, McpError> {
+        let mut config_list = HashMap::new();
+
+        if !mcp_dir.exists() {
             return Ok(config_list);
         }
 
-        let entries = fs::read_dir(mcps_dir)?;
+        let entries = fs::read_dir(mcp_dir)?;
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json")
-                && path.file_name().and_then(|s| s.to_str()) != Some("README.md") {
+                && path.file_name().and_then(|s| s.to_str()) != Some("README.md")
+            {
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(config) = serde_json::from_str::<McpConfig>(&content) {
-                        let _ = config_list.add(config);
+                        config_list.insert(config.name.clone(), config);
                     }
                 }
             }
@@ -72,257 +71,31 @@ impl McpManagerActor {
     }
 
 
-    /// 读取单个 MCP 配置文件
-    fn read_mcp_file(&self, name: &str) -> Result<McpConfig, McpError> {
-        let file_path = self.mcps_dir.join(format!("{}.json", name));
-        if !file_path.exists() {
-            return Err(McpError::NotFound(name.to_string()));
-        }
-        let content = fs::read_to_string(&file_path)?;
-        let config: McpConfig = serde_json::from_str(&content)?;
-        Ok(config)
-    }
-
-    /// 写入单个 MCP 配置文件
-    fn write_mcp_file(&self, config: &McpConfig) -> Result<(), McpError> {
-        // 确保 .mcps 目录存在
-        fs::create_dir_all(&self.mcps_dir)?;
-        
-        let file_path = self.mcps_dir.join(format!("{}.json", config.name));
-        let content = serde_json::to_string_pretty(config)?;
-        fs::write(&file_path, content)?;
-        Ok(())
-    }
-
-    /// 删除单个 MCP 配置文件
-    fn delete_mcp_file(&self, name: &str) -> Result<(), McpError> {
-        let file_path = self.mcps_dir.join(format!("{}.json", name));
-        if file_path.exists() {
-            fs::remove_file(&file_path)?;
-        }
-        Ok(())
-    }
 }
 
-impl Actor for McpManagerActor {
+impl Actor for McpAgentActor {
     type Context = Context<Self>;
 
     fn started(&mut self, _ctx: &mut Self::Context) {
         info!("McpManagerActor 已启动");
-        
-        // 确保目录存在
-        if let Err(e) = fs::create_dir_all(&self.mcps_dir) {
-            error!("创建 .mcps 目录失败: {}", e);
-        }
     }
 }
 
-// ==================== 消息定义 ====================
-
-/// 添加 MCP 配置
-#[derive(Message, Clone, Deserialize, Serialize)]
-#[rtype(result = "Result<McpConfig, McpError>")]
-pub struct AddMcpConfig {
-    pub config: McpConfig,
-}
-
-impl Handler<AddMcpConfig> for McpManagerActor {
-    type Result = ResponseActFuture<Self, Result<McpConfig, McpError>>;
-
-    fn handle(&mut self, msg: AddMcpConfig, _ctx: &mut Self::Context) -> Self::Result {
-        let config = msg.config.clone();
-        let mcps_dir = self.mcps_dir.clone();
-
-        let fut = async move {
-            // 验证配置
-            config.validate()?;
-
-            // 检查是否已存在
-            let file_path = mcps_dir.join(format!("{}.json", config.name));
-            if file_path.exists() {
-                return Err(McpError::AlreadyExists(config.name.clone()));
-            }
-
-            // 写入 .mcps/{name}.json
-            fs::create_dir_all(&mcps_dir)?;
-            let content = serde_json::to_string_pretty(&config)?;
-            fs::write(&file_path, content)?;
-
-            info!("成功添加 MCP 配置: {}", config.name);
-            Ok(config)
-        };
-
-        Box::pin(actix::fut::wrap_future(fut).map(
-            |res: Result<McpConfig, McpError>, actor: &mut Self, _ctx| {
-                if let Ok(ref config) = res {
-                    // 更新内存中的配置列表
-                    let _ = actor.mcp_list.add(config.clone());
-                }
-                res
-            },
-        ))
-    }
-}
-
-/// 删除 MCP 配置
-#[derive(Message, Clone, Deserialize, Serialize)]
-#[rtype(result = "Result<(), McpError>")]
-pub struct DeleteMcpConfig {
-    pub name: String,
-}
-
-impl Handler<DeleteMcpConfig> for McpManagerActor {
-    type Result = ResponseActFuture<Self, Result<(), McpError>>;
-
-    fn handle(&mut self, msg: DeleteMcpConfig, _ctx: &mut Self::Context) -> Self::Result {
-        let name = msg.name.clone();
-        let mcps_dir = self.mcps_dir.clone();
-
-        let fut = async move {
-            // 删除 .mcps/{name}.json
-            let file_path = mcps_dir.join(format!("{}.json", name));
-            if !file_path.exists() {
-                return Err(McpError::NotFound(name.clone()));
-            }
-            fs::remove_file(&file_path)?;
-
-            info!("成功删除 MCP 配置: {}", name);
-            Ok(name)
-        };
-
-        Box::pin(actix::fut::wrap_future(fut).map(
-            |res: Result<String, McpError>, actor: &mut Self, _ctx| {
-                if let Ok(ref name) = res {
-                    // 从内存中移除配置
-                    let _ = actor.mcp_list.remove(name);
-                }
-                res.map(|_| ())
-            },
-        ))
-    }
-}
-
-/// 查询单个 MCP 配置
-#[derive(Message, Clone, Deserialize, Serialize)]
-#[rtype(result = "Result<McpConfig, McpError>")]
-pub struct GetMcpConfig {
-    pub name: String,
-}
-impl Handler<GetMcpConfig> for McpManagerActor {
-    type Result = ResponseActFuture<Self, Result<McpConfig, McpError>>;
-
-    fn handle(&mut self, msg: GetMcpConfig, _ctx: &mut Self::Context) -> Self::Result {
-        // 直接从内存中获取
-        if let Some(config) = self.mcp_list.get(&msg.name) {
-            let config = config.clone();
-            Box::pin(actix::fut::wrap_future(async move { Ok(config) }).map(
-                |res: Result<McpConfig, McpError>, _actor: &mut Self, _ctx| res,
-            ))
-        } else {
-            let error = McpError::NotFound(msg.name.clone());
-            Box::pin(actix::fut::wrap_future(async move { Err(error) }).map(
-                |res: Result<McpConfig, McpError>, _actor: &mut Self, _ctx| res,
-            ))
-        }
-    }
-}
-
-/// 查询所有 MCP 配置
-#[derive(Message, Clone, Deserialize, Serialize)]
-#[rtype(result = "Result<Vec<McpConfig>, McpError>")]
-pub struct ListMcpConfigs;
-
-impl Handler<ListMcpConfigs> for McpManagerActor {
-    type Result = ResponseActFuture<Self, Result<Vec<McpConfig>, McpError>>;
-
-    fn handle(&mut self, _msg: ListMcpConfigs, _ctx: &mut Self::Context) -> Self::Result {
-        // 直接从内存中获取所有配置
-        let configs = self.mcp_list.list().into_iter().cloned().collect();
-        
-        Box::pin(actix::fut::wrap_future(async move { Ok(configs) }).map(
-            |res: Result<Vec<McpConfig>, McpError>, _actor: &mut Self, _ctx| res,
-        ))
-    }
-}
-
-/// 执行 MCP 工具（按配置命令拉起子进程）
-#[derive(Message, Clone, Deserialize, Serialize)]
+// 处理任务
+#[derive(Message)]
 #[rtype(result = "Result<McpExecutionResult, McpError>")]
-pub struct ExecuteMcpTool {
-    pub name: String,
-    #[serde(default)]
-    pub input: String,
-    #[serde(default = "default_timeout_secs")]
-    pub timeout_secs: u64,
+pub struct ExecuteMcp {
+    agent_id: String,
+    task_id: String,
 }
 
-fn default_timeout_secs() -> u64 {
-    30
-}
-
-impl Handler<ExecuteMcpTool> for McpManagerActor {
+impl Handler<ExecuteMcp> for McpAgentActor {
     type Result = ResponseActFuture<Self, Result<McpExecutionResult, McpError>>;
 
-    fn handle(&mut self, msg: ExecuteMcpTool, _ctx: &mut Self::Context) -> Self::Result {
-        let config = match self.mcp_list.get(&msg.name) {
-            Some(c) => c.clone(),
-            None => {
-                let err = McpError::NotFound(msg.name);
-                return Box::pin(actix::fut::wrap_future(async move { Err(err) }).map(
-                    |res: Result<McpExecutionResult, McpError>, _actor: &mut Self, _ctx| res,
-                ));
-            }
-        };
-
-        let input = msg.input;
-        let timeout_secs = msg.timeout_secs;
-
-        let fut = async move {
-            let mut cmd = Command::new(&config.command);
-
-            // 支持在 args 中使用 {input} 占位符，不存在占位符时把输入附加到最后
-            let mut used_placeholder = false;
-            for arg in &config.args {
-                if arg.contains("{input}") {
-                    used_placeholder = true;
-                    cmd.arg(arg.replace("{input}", &input));
-                } else {
-                    cmd.arg(arg);
-                }
-            }
-
-            if !input.is_empty() && !used_placeholder {
-                cmd.arg(&input);
-            }
-
-            for (k, v) in &config.env {
-                cmd.env(k, v);
-            }
-
-            let out = timeout(Duration::from_secs(timeout_secs), cmd.output())
-                .await
-                .map_err(|_| McpError::Message(format!("执行超时: {}s", timeout_secs)))?
-                .map_err(|e| McpError::Message(format!("执行失败: {}", e)))?;
-
-            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            let merged = if stderr.is_empty() {
-                stdout
-            } else if stdout.is_empty() {
-                stderr
-            } else {
-                format!("{}\n{}", stdout, stderr)
-            };
-
-            Ok(McpExecutionResult {
-                name: config.name,
-                success: out.status.success(),
-                output: merged,
-            })
-        };
-
-        Box::pin(actix::fut::wrap_future(fut).map(
-            |res: Result<McpExecutionResult, McpError>, _actor: &mut Self, _ctx| res,
-        ))
+    fn handle(&mut self, msg: ExecuteMcp, _ctx: &mut Self::Context) -> Self::Result {
+        let _mcp_list = self.mcp_list.clone();
+        let _prompt = self.prompt.clone();
+        // 占位实现：目前尚未实现具体执行逻辑，返回明确的错误以便编译通过并可逐步完善
+        Box::pin(async move { Err(McpError::Message("ExecuteMcp not implemented".into())) }.into_actor(self))
     }
 }

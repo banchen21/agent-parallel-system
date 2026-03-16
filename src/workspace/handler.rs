@@ -3,9 +3,9 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, delete, get, 
 use serde_json::json;
 use tracing::error;
 
-use crate::workspace::workspace_actor::{
+use crate::{utils::handler_util::get_user_name, workspace::workspace_actor::{
     CreateWorkspace, DeleteWorkspace, GetWorkspaces, WorkspaceManageActor,
-};
+}};
 
 // 查询
 #[get("/workspace")]
@@ -13,17 +13,9 @@ async fn get_workspace_handler(
     workspace_manage_actor: web::Data<Addr<WorkspaceManageActor>>,
     req: HttpRequest,
 ) -> impl Responder {
-    // 1. 获取 request extensions 的只读引用
-    let ext = req.extensions();
-
-    // 2. 根据你 insert 时的类型（这里假设 c.sub 是 String）来提取
-    // 注意：泛型类型必须完全匹配！
-    let user_name = match ext.get::<String>() {
-        Some(user_id) => user_id,
-        None => {
-            error!("无法获取用户信息");
-            return HttpResponse::Unauthorized().finish();
-        }
+    let user_name = match get_user_name(&req) {
+        Ok(u) => u,
+        Err(resp) => return resp,
     };
 
     // 发送消息给 Actor

@@ -73,7 +73,6 @@ where
                 // --- 验证成功逻辑 ---
                 // 将用户信息存入 extensions 供后续逻辑使用
                 req.extensions_mut().insert(c.sub.clone());
-
                 // 调用下一个服务 (真正的逻辑)
                 let fut = self.service.call(req);
                 Box::pin(async move {

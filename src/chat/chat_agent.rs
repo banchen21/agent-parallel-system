@@ -1,9 +1,9 @@
+use crate::channel::actor_messages::{ChannelManagerActor, GetMessages, ResultMessage};
 use crate::chat;
-use crate::chat::actor_messages::{ChannelManagerActor, GetMessages, ResultMessage};
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
 use crate::graph_memory::actor_memory::{AgentMemoryActor, QueryMemory};
 use crate::graph_memory::actor_memory::{GetMyName, UpdateMemory};
-use crate::task_handler::task_agent::{OtherMessage, TaskAgent};
+use crate::task::task_agent::{OtherMessage, TaskAgent};
 use crate::utils::json_util::clean_json_string;
 use actix::prelude::*;
 use anyhow::Result;
@@ -182,6 +182,7 @@ impl Handler<OtherUserMessage> for ChatAgent {
             let res_task_message_classification = this
                 .task_agent
                 .send(OtherMessage {
+                    user_name: user_message.sender.clone(),
                     long_term_memory: memory_content.clone(),
                     short_term_memory: memory_content_short.clone(),
                     user_content: user_message.content.clone(),

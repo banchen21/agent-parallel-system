@@ -1,0 +1,10 @@
+{
+  "name": "web-search",
+  "type": "stdio",
+  "command": "sh",
+  "args": [
+    "-lc",
+    "q=$(printf '%s' \"{input}\" | tr ' ' '+'); curl -sL \"https://duckduckgo.com/html/?q=${q}\" | sed -n '1,120p'"
+  ],
+  "env": {}
+}

@@ -13,13 +13,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use crate::api::auth_utils::validate_token;
-use crate::chat::actor_messages::{ChannelManagerActor, SaveMessage};
+use crate::channel::actor_messages::{ChannelManagerActor, SaveMessage};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::{MessageContent, UserMessage};
 use crate::graph_memory::actor_memory::{AgentMemoryActor, GetMyName};
-use crate::task_handler::task_notify_queue::{
-    SubscribeTaskNotify, TaskNotifyQueueActor, TaskQueueEvent, UnsubscribeTaskNotify,
-};
 
 // ─── 协议结构 ─────────────────────────────────────────────────────
 
@@ -68,7 +65,6 @@ pub struct ChatWsSession {
     chat_agent: Addr<ChatAgent>,
     channel_manager: Addr<ChannelManagerActor>,
     agent_memory: Addr<AgentMemoryActor>,
-    task_notify_queue: Addr<TaskNotifyQueueActor>,
 }
 
 impl Actor for ChatWsSession {
@@ -76,10 +72,6 @@ impl Actor for ChatWsSession {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         info!(user = %self.username, "WS 聊天会话已建立");
-        self.task_notify_queue.do_send(SubscribeTaskNotify {
-            session_id: self.session_id.clone(),
-            recipient: ctx.address().recipient(),
-        });
         // 每 30 秒发送一次 ping 保持长连接
         ctx.run_interval(std::time::Duration::from_secs(30), |_, ctx| {
             ctx.ping(b"");
@@ -87,9 +79,6 @@ impl Actor for ChatWsSession {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        self.task_notify_queue.do_send(UnsubscribeTaskNotify {
-            session_id: self.session_id.clone(),
-        });
         info!(user = %self.username, "WS 聊天会话已关闭");
     }
 }
@@ -105,6 +94,13 @@ impl Handler<PushText> for ChatWsSession {
     fn handle(&mut self, msg: PushText, ctx: &mut ws::WebsocketContext<Self>) {
         ctx.text(msg.0);
     }
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct TaskQueueEvent {
+    pub content: String,
+    pub created_at: chrono::DateTime<Utc>,
 }
 
 impl Handler<TaskQueueEvent> for ChatWsSession {
@@ -160,7 +156,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                 let addr = ctx.address();
                 let user_msg = user_message.clone();
 
-                actix::spawn(async move {
+                tokio::spawn(async move {
                     // 1. 获取 AI 名称
                     let ai_name = match agent_memory.send(GetMyName {}).await {
                         Ok(name) => name,
@@ -263,7 +259,7 @@ pub async fn ws_chat_handler(
     chat_agent: web::Data<Addr<ChatAgent>>,
     channel_manager: web::Data<Addr<ChannelManagerActor>>,
     agent_memory: web::Data<Addr<AgentMemoryActor>>,
-    task_notify_queue: web::Data<Addr<TaskNotifyQueueActor>>,
+    
 ) -> ActixResult<HttpResponse> {
     // 验证 JWT
     let username = match validate_token(&query.token) {
@@ -283,7 +279,6 @@ pub async fn ws_chat_handler(
         chat_agent: chat_agent.get_ref().clone(),
         channel_manager: channel_manager.get_ref().clone(),
         agent_memory: agent_memory.get_ref().clone(),
-        task_notify_queue: task_notify_queue.get_ref().clone(),
     };
 
     ws::start(session, &req, stream)

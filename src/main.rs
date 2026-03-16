@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 
 mod channel;
 mod core;
+mod postgre_database;
 
 // 聊天层消息处理
 mod chat;
@@ -19,7 +20,7 @@ mod workspace;
 mod agsnets;
 
 // 任务层处理
-mod task_handler;
+mod task;
 
 // neo4j图数据库记忆层
 mod graph_memory;
@@ -27,27 +28,24 @@ mod graph_memory;
 // MCP 配置管理
 mod mcp;
 
-use crate::agsnets::actor_agents::AgentManageActor;
-use crate::mcp::mcp_actor::McpManagerActor;
+use crate::agsnets::actor_agents::AgentManagerActor;
 use crate::api::auth::Auth;
+use crate::channel::actor_messages::ChannelManagerActor;
+use crate::mcp::mcp_actor::McpAgentActor;
 // 引入通道层模块
-use crate::channel::actor_database::DatabaseManager;
-use crate::chat::actor_messages::ChannelManagerActor;
 use crate::chat::chat_agent::ChatAgent;
 use crate::chat::openai_actor::{OpenAIProxyActor, ProviderConfig};
 use crate::core::actor_system::SysMonitorActor;
 use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
 use crate::graph_memory::actor_memory::AgentMemoryActor;
-use crate::task_handler::actor_task::{
-    BindAgentManager, BindChannelManager, BindMcpManager, BindTaskNotifyQueue, DagOrchestrator,
-};
-use crate::task_handler::task_agent::TaskAgent;
-use crate::task_handler::task_notify_queue::TaskNotifyQueueActor;
+use crate::postgre_database::actor_database::DatabaseManager;
+use crate::task::dag_orchestrator::DagOrchestrator;
+use crate::task::task_agent::TaskAgent;
 use crate::utils::database_util::ensure_database_exists;
 use crate::utils::env_util::env_var_or_default;
 use crate::workspace::workspace_actor::WorkspaceManageActor;
-use actix::Actor;
+use actix::{Actor, AsyncContext};
 mod api;
 
 // 工具
@@ -116,7 +114,11 @@ async fn main() -> Result<()> {
 
         let mut proxy =
             OpenAIProxyActor::new(build_provider(default_item), timeout_secs, max_tokens);
-        for item in config.providers.iter().filter(|p| p.name != default_item.name) {
+        for item in config
+            .providers
+            .iter()
+            .filter(|p| p.name != default_item.name)
+        {
             proxy = proxy.with_provider(build_provider(item));
         }
         proxy.start()
@@ -174,42 +176,47 @@ async fn main() -> Result<()> {
     let user_manager = crate::api::user::actor_user::UserManagerActor::new(pool.clone()).start();
 
     // 初始化工作区
-    let workspace_actor = WorkspaceManageActor::new(pool.clone()).start();
+    let workspace_manage_actor = WorkspaceManageActor::new(pool.clone()).start();
 
-    // MCP 管理器
-    let mcp_manager = McpManagerActor::new().start();
+    // MCP Agent
+    let mcp_agent_prompt = config.mcp_agent.prompt.clone();
+    let mcp_manager = McpAgentActor::new(open_aiproxy_actor.clone(), mcp_agent_prompt).start();
 
     // 任务管理
-    let dag_orchestrator: actix::Addr<DagOrchestrator> = DagOrchestrator::new(pool.clone()).start();
-    let task_notify_queue = TaskNotifyQueueActor::new().start();
+    // 提前声明一个变量，用于将闭包内部创建的 dag_orchestrator 传递到外部
+    let mut dag_orchestrator_opt = None;
 
-    //AgentActor
-    let agents_actor = AgentManageActor::new(
-        pool.clone(),
-        open_aiproxy_actor.clone(),
-        mcp_manager.clone(),
-        dag_orchestrator.clone(),
-    )
-    .start();
-    dag_orchestrator.do_send(BindAgentManager {
-        agent_manager: agents_actor.clone(),
+    // 使用 Actor::create 解决循环依赖
+    let agent_manager_actor = AgentManagerActor::create(|ctx| {
+        let agent_manager_addr = ctx.address();
+        let dag_orchestrator = DagOrchestrator::new(
+            pool.clone(),
+            agent_manager_addr,
+            channel_manager.clone(),
+            workspace_manage_actor.clone(),
+        )
+        .start();
+        dag_orchestrator_opt = Some(dag_orchestrator.clone());
+
+        AgentManagerActor::new(
+            pool.clone(),
+            open_aiproxy_actor.clone(),
+            mcp_manager.clone(),
+            dag_orchestrator,
+        )
     });
-    dag_orchestrator.do_send(BindMcpManager {
-        mcp_manager: mcp_manager.clone(),
-    });
-    dag_orchestrator.do_send(BindChannelManager {
-        channel_manager: channel_manager.clone(),
-    });
-    dag_orchestrator.do_send(BindTaskNotifyQueue {
-        task_notify_queue: task_notify_queue.clone(),
-    });
+    let agent_manager_actor_clone = agent_manager_actor.clone();
+    AgentManagerActor::spawn_auto_scan_loop(agent_manager_actor_clone);
+
+    // 将 DagOrchestrator 从 Option 中解包出来
+    let dag_orchestrator = dag_orchestrator_opt.expect("DagOrchestrator 启动失败");
 
     // 初始化任务Agent
     let task_agent_prompt = config.task_agent.prompt.clone();
     let task_agent = TaskAgent::new(
         open_aiproxy_actor.clone(),
         dag_orchestrator.clone(),
-        workspace_actor.clone(),
+        workspace_manage_actor.clone(),
         task_agent_prompt,
     )
     .start();
@@ -261,16 +268,15 @@ async fn main() -> Result<()> {
             .wrap(cors)
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(dag_orchestrator.clone()))
-            .app_data(web::Data::new(agents_actor.clone()))
+            .app_data(web::Data::new(agent_manager_actor.clone()))
             .app_data(web::Data::new(agent_memory_hactor_addr.clone()))
             .app_data(web::Data::new(channel_manager.clone()))
-            .app_data(web::Data::new(task_notify_queue.clone()))
             .app_data(web::Data::new(user_manager.clone()))
             .app_data(web::Data::new(redis_addr.clone()))
             .app_data(web::Data::new(chat_agent.clone()))
             .app_data(web::Data::new(sys_monitor_actor.clone()))
-            .app_data(web::Data::new(workspace_actor.clone()))
-                .app_data(web::Data::new(mcp_manager.clone()))
+            .app_data(web::Data::new(workspace_manage_actor.clone()))
+            .app_data(web::Data::new(mcp_manager.clone()))
             .app_data(web::Data::new(config.clone()))
             .configure(configure_api_routes)
     })
@@ -310,22 +316,12 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(workspace::handler::get_workspace_handler)
             .service(workspace::handler::create_workspac_handler)
             .service(workspace::handler::delete_workspace_handler)
-            // 任务
-            .service(task_handler::handler::list_tasks_handler)
-            .service(task_handler::handler::get_task_handler)
-            .service(task_handler::handler::create_task_handler)
-            // 智能体
+            // 任务（可选，后续打开）
+            .service(task::handler::list_tasks_handler)
+            // .service(task::handler::get_task_handler)
+            .service(task::handler::create_task_handler)
+            // 智能体相关路由
             .service(agsnets::handler::list_agents_handler)
-            .service(agsnets::handler::create_agent_handler)
-            .service(agsnets::handler::get_agent_handler)
-            .service(agsnets::handler::delete_agent_handler)
-            .service(agsnets::handler::get_agent_status_handler)
-            .service(agsnets::handler::list_agent_statuses_handler)
-            .service(agsnets::handler::update_agent_status_handler)
-            // MCP 配置管理
-            .service(mcp::handler::add_mcp_handler)
-            .service(mcp::handler::delete_mcp_handler)
-            .service(mcp::handler::get_mcp_handler)
-            .service(mcp::handler::list_mcp_handler),
+            .service(agsnets::handler::create_agent_handler), // 如需删除/更新状态，可在此添加对应 handler
     );
 }

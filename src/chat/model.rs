@@ -15,6 +15,31 @@ pub struct UserMessage {
     /// 创建时间
     pub created_at: DateTime<Utc>,
 }
+
+impl UserMessage {
+    pub fn new() -> Self {
+        Self {
+            sender: "unknown".to_string(),
+            source_ip: "localhost".to_string(),
+            device_type: "local".to_string(),
+            content: MessageContent::Text("".to_string()),
+            created_at: Utc::now(),
+        }
+    }
+
+    // 修改发送者
+    pub fn with_sender(mut self, sender: String) -> Self {
+        self.sender = sender;
+        self
+    }
+
+    // 修改消息
+    pub fn with_content(mut self, content: MessageContent) -> Self {
+        self.content = content;
+        self
+    }
+}
+
 // 1. 定义消息内容的枚举：要么是纯文本，要么是多模态部件数组
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

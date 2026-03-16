@@ -20,11 +20,12 @@ impl DatabaseManager {
         // 创建 messages 表
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS messages (
+            CREATE TABLE IF NOT EXISTS channel_messages (
                 id SERIAL PRIMARY KEY,
-                "user" TEXT NOT NULL,
+                username TEXT NOT NULL,
                 source_ip TEXT NOT NULL,
                 device_type TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'unread',
                 content TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -56,7 +57,8 @@ impl DatabaseManager {
                 id SERIAL PRIMARY KEY,       
                 name VARCHAR(255) UNIQUE NOT NULL,
                 description TEXT,                                      
-                owner_username  VARCHAR(50) NOT NULL,                                
+                owner_username  VARCHAR(50) NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
@@ -67,8 +69,8 @@ impl DatabaseManager {
         // 添加索引： user + created_at
         sqlx::query(
             r#"
-    CREATE INDEX IF NOT EXISTS idx_messages_user_created_at ON messages ("user", created_at DESC);
-    "#,
+        CREATE INDEX IF NOT EXISTS idx_channel_messages_username_created_at ON channel_messages (username, created_at DESC);
+        "#,
         )
         .execute(&self.pool)
         .await?;
@@ -82,7 +84,7 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
-        // 创建 agents 表（参数存 DB，记忆存工作区目录）
+        // 创建 agents 表
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS agents (
@@ -91,8 +93,6 @@ impl DatabaseManager {
                 kind VARCHAR(50) NOT NULL DEFAULT 'general',
                 workspace_name VARCHAR(255) NOT NULL,
                 owner_username  VARCHAR(50) NOT NULL,
-                mcp_list TEXT[] NOT NULL DEFAULT '{}',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT fk_agents_workspace FOREIGN KEY (workspace_name) REFERENCES workspaces(name) ON DELETE CASCADE
             );
             "#,
@@ -100,6 +100,7 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
+        // 为 agents 表添加按工作区查询的索引
         sqlx::query(
             r#"
             CREATE INDEX IF NOT EXISTS idx_agents_workspace_name ON agents (workspace_name);
@@ -109,28 +110,29 @@ impl DatabaseManager {
         .await?;
 
         // 创建 tasks 表（任务状态持久化）
+        // 任务表说明：
+        // - `id`：任务唯一标识（UUID）
+        // - `depends_on`：依赖任务的 UUID 列表，任务启动前需确保这些依赖任务已完成
+        // - `priority`：任务优先级（如 low/medium/high），用于调度排序
+        // - `status`：任务当前状态（published/accepted/executing/submitted/reviewing/completed_*）
+        // - `name`/`description`/`task_key`：任务标题、描述与唯一键（便于 DAG 识别）
+        // - `workspace_name`：所属工作区名称（外键关系通过应用层保证）
+        // - `assigned_agent_id`：被分配的 Agent（UUID），可为空
+        // - `created_at`：创建时间，便于监控和并发冲突检测
+        // 注意：如果未来需要按 `workspace_name` 或 `task_key` 做高频查询，请为相应字段建立索引或唯一约束。
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS tasks (
                 id UUID PRIMARY KEY,
+                depends_on UUID[] NOT NULL DEFAULT '{}',
+                priority VARCHAR(20) NOT NULL DEFAULT 'medium',
+                status VARCHAR(20) NOT NULL DEFAULT 'published',
                 name VARCHAR(255) NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
-                priority VARCHAR(20),
-                status VARCHAR(50) NOT NULL DEFAULT 'published',
-                due_date TEXT,
+                workspace_name VARCHAR(255),
                 assigned_agent_id UUID,
-                assigned_agent_name VARCHAR(255),
-                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at ON tasks (status, created_at DESC);
             "#,
         )
         .execute(&self.pool)

@@ -13,7 +13,7 @@ use crate::workspace::model::WorkspaceError;
 
 pub struct WorkspaceActor {
     pool: sqlx::PgPool,
-    workspace_id: String, // 标识当前是哪个工作区
+    workspace_id: String,
 }
 
 impl WorkspaceActor {
@@ -29,7 +29,6 @@ impl Actor for WorkspaceActor {
 /// 工作区 Actor：管理所有相关的子 Actor
 pub struct WorkspaceManageActor {
     pool: sqlx::PgPool,
-    // 【修复 1】管理 Actor 保存的应该是子 Actor 的地址 Addr，而不是信息数据本身
     workspaces: HashMap<String, Addr<WorkspaceActor>>,
 }
 
@@ -51,9 +50,14 @@ impl Actor for WorkspaceManageActor {
         let pool = self.pool.clone();
 
         let fut = async move {
-            sqlx::query_as::<_, WorkspaceInfo>("SELECT * FROM workspaces")
-                .fetch_all(&pool)
-                .await
+            sqlx::query_as::<_, WorkspaceInfo>(
+                "SELECT w.id, w.name, w.description, w.owner_username, w.status, w.created_at,
+                    (SELECT COUNT(*) FROM agents a WHERE a.workspace_name = w.name) AS agent_count,
+                    (SELECT COUNT(*) FROM tasks t WHERE t.workspace_name = w.name) AS task_count
+                FROM workspaces w",
+            )
+            .fetch_all(&pool)
+            .await
         };
 
         ctx.wait(
@@ -80,9 +84,9 @@ impl Actor for WorkspaceManageActor {
 pub struct WorkspaceInfo {
     pub id: i32,
     pub name: String,
-    // 将 description 改为 Option 匹配 CreateWorkspace 里的参数并防止数据库可能的 NULL 报错
     pub description: Option<String>,
     pub owner_username: String,
+    pub status: String,
     pub created_at: DateTime<Utc>,
     // 工作区中的智能体数量
     #[sqlx(default)]
@@ -102,8 +106,6 @@ pub struct CreateWorkspace {
     pub description: Option<String>,
     pub owner_username: String,
 }
-
-/// 1. 处理创建工作区
 impl Handler<CreateWorkspace> for WorkspaceManageActor {
     type Result = ResponseActFuture<Self, Result<WorkspaceInfo, WorkspaceError>>;
 
@@ -111,10 +113,10 @@ impl Handler<CreateWorkspace> for WorkspaceManageActor {
         let pool = self.pool.clone();
         let name_clone = msg.name.clone();
 
-        // 仅限英文
-        if !msg.name.chars().all(char::is_alphabetic) {
+        // 仅限英文以及下划线
+        if !msg.name.chars().all(|c| c.is_alphabetic() || c == '_') {
             return Box::pin(futures::future::err(WorkspaceError::Message(
-                "工作区名称只能包含字母".to_string(),
+                "工作区名称只能包含字母和下划线".to_string(),
             )));
         }
 
@@ -122,9 +124,9 @@ impl Handler<CreateWorkspace> for WorkspaceManageActor {
         let fut = async move {
             sqlx::query_as::<_, WorkspaceInfo>(
                 r#"
-                INSERT INTO workspaces (name, description, owner_username)
-                VALUES ($1, $2, $3)
-                RETURNING id, name, description, owner_username, created_at
+                INSERT INTO workspaces (name, description, owner_username, status)
+                VALUES ($1, $2, $3, 'active')
+                RETURNING id, name, description, owner_username, status, created_at
                 "#,
             )
             .bind(&msg.name)
@@ -162,12 +164,10 @@ impl Handler<CreateWorkspace> for WorkspaceManageActor {
 
 /// 删除工作区消息 (通过 name 删除)
 #[derive(Message)]
-// 【修复 2】消息返回类型和 Handler 的 Result 保持一致
 #[rtype(result = "Result<(), WorkspaceError>")]
 pub struct DeleteWorkspace {
     pub name: String,
 }
-/// 2. 处理删除工作区
 impl Handler<DeleteWorkspace> for WorkspaceManageActor {
     type Result = ResponseActFuture<Self, Result<(), WorkspaceError>>;
 
@@ -213,38 +213,27 @@ impl Handler<DeleteWorkspace> for WorkspaceManageActor {
         )
     }
 }
+
 /// 查询用户拥有的工作空间
 #[derive(Message)]
 #[rtype(result = "Result<Vec<WorkspaceInfo>, WorkspaceError>")]
 pub struct GetWorkspaces(pub String);
-
 /// 3. 处理查询工作区列表
 impl Handler<GetWorkspaces> for WorkspaceManageActor {
     type Result = ResponseActFuture<Self, Result<Vec<WorkspaceInfo>, WorkspaceError>>;
 
     fn handle(&mut self, msg: GetWorkspaces, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
-
-        // 1. 获取消息中传递的用户名（注意去掉了 msg 前的下划线）
         let user_name = msg.0.clone();
-
         let fut = async move {
-            // 2. 在 SQL 中增加 WHERE 条件，根据 owner_username 过滤，并统计智能体和任务数量
             sqlx::query_as::<_, WorkspaceInfo>(
                 r#"
-                SELECT
-                    w.id,
-                    w.name,
-                    w.description,
-                    w.owner_username,
-                    w.created_at,
-                    COALESCE(COUNT(DISTINCT a.id), 0)::bigint as agent_count,
-                    0::bigint as task_count
+                SELECT 
+                    w.id, w.name, w.description, w.owner_username, w.status, w.created_at,
+                    (SELECT COUNT(*) FROM agents a WHERE a.workspace_name = w.name) AS agent_count,
+                    (SELECT COUNT(*) FROM tasks t WHERE t.workspace_name = w.name) AS task_count
                 FROM workspaces w
-                LEFT JOIN agents a ON a.workspace_name = w.name
                 WHERE w.owner_username = $1
-                GROUP BY w.id, w.name, w.description, w.owner_username, w.created_at
-                ORDER BY w.id ASC
                 "#,
             )
             .bind(user_name) // 3. 绑定具体的用户名参数

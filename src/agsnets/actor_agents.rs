@@ -1,29 +1,26 @@
 use actix::{
     Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture,
-    ResponseFuture,
+    WrapFuture,
 };
+use uuid::Uuid;
+
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
+use std::time::Duration;
 use tracing::{error, info};
 
 use crate::{
     agsnets::model::AgentError,
     chat::openai_actor::OpenAIProxyActor,
-    mcp::mcp_actor::{ExecuteMcpTool, McpManagerActor},
-    task_handler::actor_task::{DagOrchestrator, RegisterAgent},
-    utils::workspace_path::{agent_dir, agent_memory_dir, ensure_dir},
+    mcp::mcp_actor::McpAgentActor,
+    task::dag_orchestrator::DagOrchestrator,
     workspace::model::{AgentId, AgentInfo, AgentKind},
 };
 
-// ======================== 状态类型 ========================
-
-/// 智能体三态（对外暴露，用于展示）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
-    /// 在线：已注册并运行，尚未接收任务
-    Online,
     /// 工作中：正在处理任务
     Working,
     /// 空闲：任务已完成，等待下一个任务
@@ -34,112 +31,66 @@ impl AgentStatus {
     /// 返回中文状态标签
     pub fn label(&self) -> &'static str {
         match self {
-            AgentStatus::Online => "在线",
             AgentStatus::Working => "工作中",
             AgentStatus::Idle => "空闲",
         }
     }
 }
 
-/// AgentActor 的状态快照（用于 HTTP 响应）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentStatusInfo {
-    pub agent_id: AgentId,
-    pub name: String,
-    pub status: AgentStatus,
-    pub status_label: String,
-}
-
-// ======================== AgentManageActor ========================
-
-pub struct AgentManageActor {
+pub struct AgentManagerActor {
+    pool: sqlx::PgPool,
     agents: HashMap<AgentId, Addr<AgentActor>>,
     open_aiproxy_actor: Addr<OpenAIProxyActor>,
-    mcp_manager: Addr<McpManagerActor>,
+    mcp_manager: Addr<McpAgentActor>,
     dag_orchestrator: Addr<DagOrchestrator>,
-    pool: sqlx::PgPool,
 }
 
-impl AgentManageActor {
+impl AgentManagerActor {
     pub fn new(
         pool: sqlx::PgPool,
         open_aiproxy_actor: Addr<OpenAIProxyActor>,
-        mcp_manager: Addr<McpManagerActor>,
+        mcp_manager: Addr<McpAgentActor>,
         dag_orchestrator: Addr<DagOrchestrator>,
     ) -> Self {
-        Self {
+        let this = AgentManagerActor {
             agents: HashMap::new(),
             open_aiproxy_actor,
             mcp_manager,
             dag_orchestrator,
             pool,
-        }
+        };
+        this
+    }
+
+    pub fn spawn_auto_scan_loop(addr: Addr<AgentManagerActor>) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let _ = addr.send(AutoScan {}).await;
+            }
+        });
     }
 }
 
-impl Actor for AgentManageActor {
+impl Actor for AgentManagerActor {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!("AgentManageActor 已启动，开始恢复已存在的 Agent");
+        info!("AgentManageActor started");
+    }
 
-        let pool = self.pool.clone();
-        let open_aiproxy_actor = self.open_aiproxy_actor.clone();
-        let mcp_manager = self.mcp_manager.clone();
-
-        ctx.spawn(
-            actix::fut::wrap_future(async move {
-                sqlx::query(
-                    r#"
-                    SELECT id, name, kind, workspace_name, owner_username, mcp_list
-                    FROM agents
-                    ORDER BY name ASC
-                    "#,
-                )
-                .fetch_all(&pool)
-                .await
-            })
-            .map(move |res, actor: &mut Self, _ctx| match res {
-                Ok(rows) => {
-                    for row in rows {
-                        let agent = AgentInfo {
-                            id: row.get("id"),
-                            name: row.get("name"),
-                            kind: AgentKind::from_db_str(row.get::<&str, _>("kind")),
-                            workspace_name: row.get("workspace_name"),
-                            owner_username: row.get("owner_username"),
-                            mcp_list: row.get("mcp_list"),
-                        };
-
-                        if actor.agents.contains_key(&agent.id) {
-                            continue;
-                        }
-
-                        let addr = AgentActor::new(
-                            agent.clone(),
-                            open_aiproxy_actor.clone(),
-                            mcp_manager.clone(),
-                        )
-                        .start();
-                        actor.agents.insert(agent.id, addr);
-                        actor.dag_orchestrator.do_send(RegisterAgent {
-                            agent_id: agent.id,
-                            name: agent.display_name(),
-                            workspace_name: agent.workspace_name.clone(),
-                            mcp_list: agent.mcp_list.clone(),
-                        });
-                        info!("♻️ 已恢复 Agent [{}] 并注册到任务编排器", agent.id);
-                    }
-                }
-                Err(e) => {
-                    error!("恢复 Agent 列表失败: {}", e);
-                }
-            }),
-        );
+    fn stopped(&mut self, ctx: &mut Self::Context) {
+        // 停止所有 AgentActor
+        for (agent_id, agent_addr) in self.agents.drain() {
+            //TODO 关闭 AgentActor
+            info!("Stopping AgentActor with ID: {}", agent_id);
+        }
+        info!("AgentManageActor stopped");
     }
 }
 
-// 创建agent
+// 创建 Agent
 #[derive(Message, Clone, Deserialize, Serialize)]
 #[rtype(result = "Result<AgentInfo, AgentError>")]
 pub struct CreateAgent {
@@ -151,486 +102,376 @@ pub struct CreateAgent {
     pub mcp_list: Vec<String>,
 }
 
-impl Handler<CreateAgent> for AgentManageActor {
-    // 1. 将返回值类型改为 ResponseActFuture
+impl Handler<CreateAgent> for AgentManagerActor {
     type Result = ResponseActFuture<Self, Result<AgentInfo, AgentError>>;
-
     fn handle(&mut self, msg: CreateAgent, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
-        let open_aiproxy_actor = self.open_aiproxy_actor.clone();
-        let mcp_manager = self.mcp_manager.clone();
-        let dag_orchestrator = self.dag_orchestrator.clone();
-        let mut agent = AgentInfo::create(msg.name, msg.kind, msg.workspace_name.clone());
-        agent.mcp_list = msg.mcp_list.clone();
 
-        // 我们克隆一份用于在异步块里返回
-        let agent_clone = agent.clone();
+        Box::pin(
+            async move {
+                // 生成 UUID
+                let id = Uuid::new_v4();
 
-        // 2. 构造一个【纯异步 Future】，里面绝对不能出现 `self`
-        let workspace_name = msg.workspace_name.clone();
-        let fut = async move {
-            // 1. 检查工作区是否存在
-            let exists: (bool,) =
-                sqlx::query_as("SELECT EXISTS(SELECT 1 FROM workspaces WHERE name = $1)")
-                    .bind(&workspace_name)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(AgentError::DatabaseError)?;
-            if !exists.0 {
-                return Err(AgentError::NotFound(workspace_name.clone()));
-            }
+                let kind_str = msg.kind.as_db_str();
 
-            sqlx::query(
-                r#"
-                INSERT INTO agents (id, "name", kind, workspace_name, owner_username, mcp_list)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                "#,
-            )
-            .bind(&agent_clone.id)
-            .bind(&agent_clone.name)
-            .bind(agent_clone.kind.as_db_str())
-            .bind(&workspace_name)
-            .bind(&msg.user_name)
-            .bind(&agent_clone.mcp_list)
-            .execute(&pool)
-            .await
-            .map_err(|e| {
-                error!("❌ 保存失败: {}", e);
-                AgentError::DatabaseError(e)
-            })?;
+                let res = sqlx::query(
+                    "INSERT INTO agents (id, name, kind, workspace_name, owner_username) VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(id)
+                .bind(&msg.name)
+                .bind(kind_str)
+                .bind(&msg.workspace_name)
+                .bind(&msg.user_name)
+                .execute(&pool)
+                .await;
 
-            let adir = agent_dir(&workspace_name, agent_clone.id);
-            let mem_dir = agent_memory_dir(&workspace_name, agent_clone.id);
-            ensure_dir(&adir).map_err(AgentError::IoError)?;
-            ensure_dir(&mem_dir).map_err(AgentError::IoError)?;
-
-            Ok((agent, open_aiproxy_actor))
-        };
-
-        // 3. 使用 wrap_future 包装异步任务，并在 map 回调中安全地修改 Actor 状态
-        Box::pin(actix::fut::wrap_future(fut).map(
-            move |res: Result<(AgentInfo, Addr<OpenAIProxyActor>), AgentError>,
-                  actor: &mut Self,
-                  _ctx| {
                 match res {
-                    Ok((created_agent, proxy)) => {
-                        // 启动 AgentActor 并注册到管理器
-                        let addr = AgentActor::new(created_agent.clone(), proxy, mcp_manager.clone()).start();
-                        actor.agents.insert(created_agent.id, addr);
-                        dag_orchestrator.do_send(RegisterAgent {
-                            agent_id: created_agent.id,
-                            name: created_agent.display_name(),
-                            workspace_name: created_agent.workspace_name.clone(),
-                            mcp_list: created_agent.mcp_list.clone(),
-                        });
-                        info!("✅ AgentActor [{}] 已注册，状态：空闲", created_agent.id);
-                        Ok(created_agent)
-                    }
-                    Err(e) => Err(e),
+                    Ok(_) => Ok(AgentInfo {
+                        id,
+                        name: msg.name,
+                        kind: msg.kind,
+                        workspace_name: msg.workspace_name,
+                        owner_username: msg.user_name,
+                        mcp_list: msg.mcp_list,
+                    }),
+                    Err(e) => Err(AgentError::DatabaseError(e)),
                 }
-            },
-        ))
-    }
-}
-
-// --- ListAgents: 查询所有 Agent 基础信息 ---
-
-#[derive(Message)]
-#[rtype(result = "Result<Vec<AgentInfo>, AgentError>")]
-pub struct ListAgents;
-
-impl Handler<ListAgents> for AgentManageActor {
-    type Result = ResponseFuture<Result<Vec<AgentInfo>, AgentError>>;
-
-    fn handle(&mut self, _msg: ListAgents, _ctx: &mut Self::Context) -> Self::Result {
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let rows = sqlx::query(
-                r#"
-                SELECT id, name, kind, workspace_name, owner_username, mcp_list
-                FROM agents
-                ORDER BY name ASC
-                "#,
-            )
-            .fetch_all(&pool)
-            .await
-            .map_err(AgentError::DatabaseError)?;
-
-            let agents = rows
-                .into_iter()
-                .map(|row| AgentInfo {
-                    id: row.get("id"),
-                    name: row.get("name"),
-                    kind: AgentKind::from_db_str(row.get::<&str, _>("kind")),
-                    workspace_name: row.get("workspace_name"),
-                    owner_username: row.get("owner_username"),
-                    mcp_list: row.get("mcp_list"),
-                })
-                .collect();
-
-            Ok(agents)
-        })
-    }
-}
-
-// --- GetAgent: 查询单个 Agent 基础信息 ---
-
-#[derive(Message)]
-#[rtype(result = "Result<AgentInfo, AgentError>")]
-pub struct GetAgent {
-    pub agent_id: AgentId,
-}
-
-impl Handler<GetAgent> for AgentManageActor {
-    type Result = ResponseFuture<Result<AgentInfo, AgentError>>;
-
-    fn handle(&mut self, msg: GetAgent, _ctx: &mut Self::Context) -> Self::Result {
-        let pool = self.pool.clone();
-
-        Box::pin(async move {
-            let row = sqlx::query(
-                r#"
-                SELECT id, name, kind, workspace_name, owner_username, mcp_list
-                FROM agents
-                WHERE id = $1
-                "#,
-            )
-            .bind(msg.agent_id)
-            .fetch_optional(&pool)
-            .await
-            .map_err(AgentError::DatabaseError)?;
-
-            match row {
-                Some(row) => Ok(AgentInfo {
-                    id: row.get("id"),
-                    name: row.get("name"),
-                    kind: AgentKind::from_db_str(row.get::<&str, _>("kind")),
-                    workspace_name: row.get("workspace_name"),
-                    owner_username: row.get("owner_username"),
-                    mcp_list: row.get("mcp_list"),
-                }),
-                None => Err(AgentError::NotFound(msg.agent_id.to_string())),
             }
-        })
+            .into_actor(self),
+        )
     }
 }
 
-// --- DeleteAgent: 删除 Agent 基础信息及管理器中的运行实例 ---
-
+// 启动Agent
 #[derive(Message)]
 #[rtype(result = "Result<(), AgentError>")]
-pub struct DeleteAgent {
+pub struct StartAgent {
     pub agent_id: AgentId,
 }
 
-impl Handler<DeleteAgent> for AgentManageActor {
+impl Handler<StartAgent> for AgentManagerActor {
     type Result = ResponseActFuture<Self, Result<(), AgentError>>;
+    fn handle(&mut self, msg: StartAgent, _ctx: &mut Self::Context) -> Self::Result {
+        // 如果该 agent 已经存在于内存中，直接返回
+        if self.agents.contains_key(&msg.agent_id) {
+            return Box::pin(async move { Ok(()) }.into_actor(self));
+        }
 
-    fn handle(&mut self, msg: DeleteAgent, _ctx: &mut Self::Context) -> Self::Result {
-        let pool = self.pool.clone();
-        let agent_id = msg.agent_id;
-
-        let fut = async move {
-            let result = sqlx::query(
-                r#"
-                DELETE FROM agents
-                WHERE id = $1
-                "#,
-            )
-            .bind(agent_id)
-            .execute(&pool)
-            .await
-            .map_err(AgentError::DatabaseError)?;
-
-            if result.rows_affected() == 0 {
-                return Err(AgentError::NotFound(agent_id.to_string()));
-            }
-
-            Ok(())
+        // 创建并启动 AgentActor 实例，然后将其 Addr 存入管理器
+        let actor = AgentActor {
+            id: msg.agent_id,
+            lifecycle: ActorLifecycle::Starting,
+            task_id: None,
+            open_aiproxy_actor: self.open_aiproxy_actor.clone(),
+            mcp_manager: self.mcp_manager.clone(),
+            dag_orchestrator: self.dag_orchestrator.clone(),
+            pool: self.pool.clone(),
         };
 
-        Box::pin(actix::fut::wrap_future(fut).map(move |res, actor: &mut Self, _ctx| {
-            if res.is_ok() {
-                actor.agents.remove(&agent_id);
-                info!("🗑️ AgentActor [{}] 已从管理器移除", agent_id);
+        let addr = actor.start();
+        self.agents.insert(msg.agent_id, addr);
+
+        Box::pin(async move { Ok(()) }.into_actor(self))
+    }
+}
+
+// 停止Agent
+#[derive(Message)]
+#[rtype(result = "Result<(), AgentError>")]
+pub struct StopAgent {
+    pub agent_id: AgentId,
+}
+
+impl Handler<StopAgent> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, Result<(), AgentError>>;
+    fn handle(&mut self, msg: StopAgent, _ctx: &mut Self::Context) -> Self::Result {
+        Box::pin(async move { Ok(()) }.into_actor(self))
+    }
+}
+
+// 获取user的agent列表
+#[derive(Message)]
+#[rtype(result = "Result<Vec<AgentInfo>, AgentError>")]
+pub struct ListAgents {
+    pub user_name: String,
+}
+
+impl Handler<ListAgents> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, Result<Vec<AgentInfo>, AgentError>>;
+    fn handle(&mut self, msg: ListAgents, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+
+        Box::pin(
+            async move {
+                let res = sqlx::query("SELECT id, name, kind, workspace_name, owner_username FROM agents WHERE owner_username = $1")
+                    .bind(&msg.user_name)
+                    .fetch_all(&pool)
+                    .await;
+
+                match res {
+                    Ok(rows) => {
+                        let mut list: Vec<AgentInfo> = Vec::new();
+                        for row in rows {
+                            let id: Uuid = row.try_get("id").map_err(AgentError::DatabaseError)?;
+                            let name: String = row.try_get("name").map_err(AgentError::DatabaseError)?;
+                            let kind_str: String = row.try_get("kind").map_err(AgentError::DatabaseError)?;
+                            let workspace_name: String = row.try_get("workspace_name").map_err(AgentError::DatabaseError)?;
+                            let owner_username: String = row.try_get("owner_username").map_err(AgentError::DatabaseError)?;
+
+                            list.push(AgentInfo {
+                                id,
+                                name,
+                                kind: AgentKind::from_db_str(&kind_str),
+                                workspace_name,
+                                owner_username,
+                                mcp_list: vec![],
+                            });
+                        }
+                        Ok(list)
+                    }
+                    Err(e) => Err(AgentError::DatabaseError(e)),
+                }
             }
-            res
+            .into_actor(self),
+        )
+    }
+}
+
+// 获取空闲的Agent
+#[derive(Message)]
+#[rtype(result = "Result<AgentId, AgentError>")]
+pub struct CheckAvailableAgent {
+    // 工作空间
+    pub workspace_name: String,
+    pub user_name: String,
+}
+
+impl Handler<CheckAvailableAgent> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, Result<AgentId, AgentError>>;
+    fn handle(&mut self, _msg: CheckAvailableAgent, _ctx: &mut Self::Context) -> Self::Result {
+        // 在同步上下文中快照当前 agents 的 id/addr 列表，避免在 async move 中捕获 `self`
+        let agents_snapshot: Vec<(AgentId, Addr<AgentActor>)> = self
+            .agents
+            .iter()
+            .map(|(id, addr)| (id.clone(), addr.clone()))
+            .collect();
+
+        let pool = self.pool.clone();
+
+        Box::pin(
+            async move {
+                // 优先尝试在内存中的 AgentActor 中找到处于 Running 状态的实例
+                for (id, addr) in agents_snapshot.into_iter() {
+                    match addr.send(GetLifecycle {}).await {
+                        Ok(Ok(lc)) => {
+                            if matches!(lc, ActorLifecycle::Starting) {
+                                return Ok(id);
+                            }
+                        }
+                        _ => continue,
+                    }
+                }
+
+                // 回退：从数据库中挑选一个未指定的 agent（按 workspace + owner 匹配）
+                let db_res = sqlx::query("SELECT id FROM agents WHERE workspace_name = $1 AND owner_username = $2 LIMIT 1")
+                    .bind(&_msg.workspace_name)
+                    .bind(&_msg.user_name)
+                    .fetch_optional(&pool)
+                    .await;
+
+                match db_res {
+                    Ok(Some(row)) => {
+                        let id: Uuid = row.try_get("id").map_err(AgentError::DatabaseError)?;
+                        Ok(id)
+                    }
+                    Ok(None) => Err(AgentError::Message("no available agent".into())),
+                    Err(e) => Err(AgentError::DatabaseError(e)),
+                }
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+// 自动扫描消息（由后台 loop 发送）
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct AutoScan;
+
+impl Handler<AutoScan> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, ()>;
+    fn handle(&mut self, _msg: AutoScan, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+
+        // 快照已存在的 agent id
+        let existing_ids: Vec<AgentId> = self.agents.keys().cloned().collect();
+
+        let open_aiproxy = self.open_aiproxy_actor.clone();
+        let mcp = self.mcp_manager.clone();
+        let dag = self.dag_orchestrator.clone();
+
+        let work = async move {
+            match sqlx::query("SELECT id FROM agents").fetch_all(&pool).await {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter_map(|r| r.try_get::<Uuid, _>("id").ok())
+                    .collect::<Vec<Uuid>>(),
+                Err(e) => {
+                    error!("Failed to fetch agents from db: {}", e);
+                    Vec::new()
+                }
+            }
+        };
+
+        Box::pin(work.into_actor(self).map(move |ids, actor, _ctx| {
+            for id in ids.into_iter() {
+                if !existing_ids.contains(&id) {
+                    let a = AgentActor {
+                        id,
+                        lifecycle: ActorLifecycle::Starting,
+                        task_id: None,
+                        open_aiproxy_actor: open_aiproxy.clone(),
+                        mcp_manager: mcp.clone(),
+                        dag_orchestrator: dag.clone(),
+                        pool: actor.pool.clone(),
+                    };
+
+                    let addr = a.start();
+                    actor.agents.insert(id, addr);
+                    info!("Auto-started AgentActor {}", id);
+                }
+            }
         }))
     }
 }
 
-// --- QueryAgentStatus: 查询单个 Agent 状态 ---
-
-#[derive(Message)]
-#[rtype(result = "Result<AgentStatusInfo, AgentError>")]
-pub struct QueryAgentStatus {
-    pub agent_id: AgentId,
-}
-
-impl Handler<QueryAgentStatus> for AgentManageActor {
-    type Result = ResponseFuture<Result<AgentStatusInfo, AgentError>>;
-
-    fn handle(&mut self, msg: QueryAgentStatus, _ctx: &mut Self::Context) -> Self::Result {
-        match self.agents.get(&msg.agent_id) {
-            Some(addr) => {
-                let addr = addr.clone();
-                Box::pin(async move {
-                    addr.send(GetStatusInfo)
-                        .await
-                        .map_err(AgentError::MailboxError)
-                })
-            }
-            None => Box::pin(async move {
-                Err(AgentError::NotFound(msg.agent_id.to_string()))
-            }),
-        }
-    }
-}
-
-// --- ListAgentStatuses: 查询所有 Agent 状态 ---
-
-#[derive(Message)]
-#[rtype(result = "Vec<AgentStatusInfo>")]
-pub struct ListAgentStatuses;
-
-impl Handler<ListAgentStatuses> for AgentManageActor {
-    type Result = ResponseFuture<Vec<AgentStatusInfo>>;
-
-    fn handle(&mut self, _msg: ListAgentStatuses, _ctx: &mut Self::Context) -> Self::Result {
-        let agents: Vec<(AgentId, Addr<AgentActor>)> = self
-            .agents
-            .iter()
-            .map(|(id, addr)| (*id, addr.clone()))
-            .collect();
-
-        Box::pin(async move {
-            let mut result = Vec::new();
-            for (_id, addr) in agents {
-                if let Ok(info) = addr.send(GetStatusInfo).await {
-                    result.push(info);
-                }
-            }
-            result
-        })
-    }
-}
-
-// --- UpdateAgentStatus: 更新指定 Agent 状态 ---
-
-#[derive(Message, Deserialize)]
-#[rtype(result = "Result<(), AgentError>")]
-pub struct UpdateAgentStatus {
-    pub agent_id: AgentId,
-    pub status: AgentStatus,
-}
-
-impl Handler<UpdateAgentStatus> for AgentManageActor {
-    type Result = ResponseFuture<Result<(), AgentError>>;
-
-    fn handle(&mut self, msg: UpdateAgentStatus, _ctx: &mut Self::Context) -> Self::Result {
-        match self.agents.get(&msg.agent_id) {
-            Some(addr) => {
-                let addr = addr.clone();
-                Box::pin(async move {
-                    addr.send(SetStatus(msg.status))
-                        .await
-                        .map_err(AgentError::MailboxError)
-                })
-            }
-            None => Box::pin(async move {
-                Err(AgentError::NotFound(msg.agent_id.to_string()))
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentTaskExecutionResult {
-    pub success: bool,
-    pub output: String,
-}
-
-#[derive(Message, Clone, Serialize, Deserialize)]
-#[rtype(result = "Result<AgentTaskExecutionResult, AgentError>")]
-pub struct ExecuteTask {
-    pub task_id: String,
-    pub input: String,
-    pub mcp_names: Vec<String>,
-}
-
-#[derive(Message, Clone, Serialize, Deserialize)]
-#[rtype(result = "Result<AgentTaskExecutionResult, AgentError>")]
-pub struct ExecuteAgentTask {
-    pub agent_id: AgentId,
-    pub task_id: String,
-    pub input: String,
-    pub mcp_names: Vec<String>,
-}
-
-impl Handler<ExecuteAgentTask> for AgentManageActor {
-    type Result = ResponseFuture<Result<AgentTaskExecutionResult, AgentError>>;
-
-    fn handle(&mut self, msg: ExecuteAgentTask, _ctx: &mut Self::Context) -> Self::Result {
-        match self.agents.get(&msg.agent_id) {
-            Some(addr) => {
-                let addr = addr.clone();
-                let task_msg = ExecuteTask {
-                    task_id: msg.task_id,
-                    input: msg.input,
-                    mcp_names: msg.mcp_names,
-                };
-                Box::pin(async move {
-                    addr.send(task_msg)
-                        .await
-                        .map_err(AgentError::MailboxError)?
-                })
-            }
-            None => Box::pin(async move {
-                Err(AgentError::NotFound(msg.agent_id.to_string()))
-            }),
-        }
-    }
-}
-
-// ======================== AgentActor ========================
-
-/// 智能体 Actor
 pub struct AgentActor {
-    open_aiproxy_actor: Addr<OpenAIProxyActor>,
-    mcp_manager: Addr<McpManagerActor>,
     id: AgentId,
-    name: String,
-    kind: AgentKind,
-    status: AgentStatus,
-    /// 使用的代理商名称（对应 OpenAIProxyActor 中已注册的 provider）
-    provider: String,
-    /// 使用的模型名称；空字符串表示使用该代理商的默认模型
-    model: String,
-    mcp_list: Vec<String>,
+    lifecycle: ActorLifecycle,
+    task_id: Option<Uuid>, // 任务id
+    open_aiproxy_actor: Addr<OpenAIProxyActor>,
+    mcp_manager: Addr<McpAgentActor>,
+    dag_orchestrator: Addr<DagOrchestrator>,
+    pool: sqlx::PgPool,
 }
 
-impl AgentActor {
-    pub fn new(
-        agent_info: AgentInfo,
-        open_aiproxy_actor: Addr<OpenAIProxyActor>,
-        mcp_manager: Addr<McpManagerActor>,
-    ) -> Self {
-        let mcp_list = agent_info.mcp_list.clone();
-        AgentActor {
-            open_aiproxy_actor,
-            mcp_manager,
-            id: agent_info.id,
-            name: agent_info.name,
-            kind: agent_info.kind,
-            status: AgentStatus::Idle,
-            provider: String::new(), // 空字符串 → 使用 OpenAIProxyActor 默认代理商
-            model: String::new(),    // 空字符串 → 使用该代理商默认模型
-            mcp_list,
-        }
-    }
-
-    /// 指定代理商和模型
-    pub fn with_provider(mut self, provider: impl Into<String>, model: impl Into<String>) -> Self {
-        self.provider = provider.into();
-        self.model = model.into();
-        self
-    }
+/// Actor 生命周期快照（用于查询 Actor 本身的生命周期/连通性）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorLifecycle {
+    /// Actor 正在启动（已分配但尚未进入运行）
+    Starting,
+    /// Actor 正常运行
+    Running,
+    /// Actor 正在停止（进入停止流程）
+    Stopping,
+    /// Actor 已停止
+    Stopped,
 }
 
 impl Actor for AgentActor {
     type Context = Context<Self>;
 
-    fn started(&mut self, _ctx: &mut Self::Context) {
-        info!("AgentActor [{}] 已启动，状态：{}", self.id, self.status.label());
-    }
-}
+    // 启动
+    fn started(&mut self, ctx: &mut Self::Context) {
+        self.lifecycle = ActorLifecycle::Starting;
+        info!("AgentActor {} started", self.id);
 
-// --- GetStatusInfo: 获取 Agent 状态快照 ---
+        // 周期性检查：查找分配给该 Agent 且处于 accepted 的任务并标记为 executing
+        let interval = Duration::from_secs(5);
+        ctx.run_interval(interval, |actor, ctx| {
+            let pool = actor.pool.clone();
+            let agent_id = actor.id;
 
-#[derive(Message)]
-#[rtype(result = "AgentStatusInfo")]
-pub struct GetStatusInfo;
-
-impl Handler<GetStatusInfo> for AgentActor {
-    type Result = actix::MessageResult<GetStatusInfo>;
-
-    fn handle(&mut self, _: GetStatusInfo, _: &mut Context<Self>) -> Self::Result {
-        actix::MessageResult(AgentStatusInfo {
-            agent_id: self.id,
-            name: self.name.clone(),
-            status: self.status.clone(),
-            status_label: self.status.label().to_string(),
-        })
-    }
-}
-
-// --- SetStatus: 更新 Agent 状态 ---
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetStatus(pub AgentStatus);
-
-impl Handler<SetStatus> for AgentActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetStatus, _: &mut Context<Self>) {
-        info!(
-            "AgentActor [{}] 状态变更：{} → {}",
-            self.id,
-            self.status.label(),
-            msg.0.label()
-        );
-        self.status = msg.0;
-    }
-}
-
-impl Handler<ExecuteTask> for AgentActor {
-    type Result = ResponseFuture<Result<AgentTaskExecutionResult, AgentError>>;
-
-    fn handle(&mut self, msg: ExecuteTask, _ctx: &mut Context<Self>) -> Self::Result {
-        let mcp_manager = self.mcp_manager.clone();
-        let task_id = msg.task_id;
-        let input = msg.input;
-        let mcp_names = msg.mcp_names;
-
-        Box::pin(async move {
-            let mut outputs = Vec::new();
-            let mut all_success = true;
-
-            for mcp_name in mcp_names {
-                match mcp_manager
-                    .send(ExecuteMcpTool {
-                        name: mcp_name.clone(),
-                        input: input.clone(),
-                        timeout_secs: 30,
-                    })
-                    .await
+            // 使用 actor-aware future 在异步 DB 操作完成后可以安全地访问并修改 actor 的状态
+            let work = async move {
+                match sqlx::query(
+                    "SELECT id FROM tasks WHERE assigned_agent_id = $1 AND status = 'accepted'",
+                )
+                .bind(agent_id)
+                .fetch_all(&pool)
+                .await
                 {
-                    Ok(Ok(res)) => {
-                        outputs.push(format!("{}: {}", res.name, res.output));
-                        if !res.success {
-                            all_success = false;
+                    Ok(rows) => {
+                        let mut any_started = false;
+                        for row in rows {
+                            if let Ok(task_id) = row.try_get::<Uuid, &str>("id") {
+                                match sqlx::query("UPDATE tasks SET status = $1 WHERE id = $2")
+                                    .bind("executing")
+                                    .bind(task_id)
+                                    .execute(&pool)
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        tracing::info!(
+                                            "Agent {} started task {}",
+                                            agent_id,
+                                            task_id
+                                        );
+                                        any_started = true;
+                                    }
+                                    Err(e) => tracing::error!(
+                                        "Failed to update task {} to executing: {}",
+                                        task_id,
+                                        e
+                                    ),
+                                }
+                            }
                         }
-                    }
-                    Ok(Err(e)) => {
-                        outputs.push(format!("{}: {}", mcp_name, e));
-                        all_success = false;
+                        Ok(any_started)
                     }
                     Err(e) => {
-                        outputs.push(format!("{}: actor err: {}", mcp_name, e));
-                        all_success = false;
+                        tracing::error!(
+                            "Failed to query assigned tasks for agent {}: {}",
+                            agent_id,
+                            e
+                        );
+                        Ok(false)
                     }
                 }
-            }
+            };
 
-            info!(task_id = %task_id, success = %all_success, "AgentActor 任务执行完成");
+            // 将异步工作转换为 actor future，然后在回调中根据结果设置生命周期
+            ctx.spawn(
+                work.into_actor(actor)
+                    .map(|res: Result<bool, sqlx::Error>, actor, _ctx| {
+                        if let Ok(found) = res {
+                            if found {
+                                actor.lifecycle = ActorLifecycle::Running;
+                            }
+                        }
+                    }),
+            );
+        });
+    }
 
-            Ok(AgentTaskExecutionResult {
-                success: all_success,
-                output: outputs.join("\n"),
-            })
-        })
+    // 停止
+    fn stopped(&mut self, ctx: &mut Self::Context) {
+        self.lifecycle = ActorLifecycle::Stopped;
+        info!("AgentActor {} stopped", self.id);
     }
 }
 
+// 轻量探测消息：用于检测 Actor 是否可达
+#[derive(Message)]
+#[rtype(result = "Result<(), ()>")]
+pub struct Ping;
+
+impl Handler<Ping> for AgentActor {
+    type Result = Result<(), ()>;
+    fn handle(&mut self, _msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
+        Ok(())
+    }
+}
+
+// 生命周期查询消息：返回 ActorLifecycle 快照
+#[derive(Message)]
+#[rtype(result = "Result<ActorLifecycle, ()>")]
+pub struct GetLifecycle;
+
+impl Handler<GetLifecycle> for AgentActor {
+    type Result = Result<ActorLifecycle, ()>;
+    fn handle(&mut self, _msg: GetLifecycle, _ctx: &mut Self::Context) -> Self::Result {
+        Ok(self.lifecycle.clone())
+    }
+}
