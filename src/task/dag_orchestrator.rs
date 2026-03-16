@@ -2,9 +2,9 @@ use actix::prelude::*;
 use sqlx::PgPool;
 
 use crate::{
-    agsnets::actor_agents::AgentManagerActor,
+    agsnets::actor_agents_manage::AgentManagerActor,
     channel::actor_messages::ChannelManagerActor,
-    task::model::{TaskItem, TaskTableModel, TaskInfo, TaskInfoResponse},
+    task::model::{TaskInfo, TaskInfoResponse, TaskItem, TaskTableModel},
     workspace::workspace_actor::{GetWorkspaces, WorkspaceManageActor},
 };
 
@@ -141,7 +141,7 @@ impl Handler<SubmitTask> for DagOrchestrator {
 
             // 3) 同步询问可用 agent
             let agent_res = agent_manager
-                .send(crate::agsnets::actor_agents::CheckAvailableAgent {
+                .send(crate::agsnets::actor_agents_manage::CheckAvailableAgent {
                     workspace_name: workspace_name.clone(),
                     user_name: user_name.clone(),
                 })
@@ -163,7 +163,7 @@ impl Handler<SubmitTask> for DagOrchestrator {
             if let Some(agent_id) = assigned_agent {
                 // 确保对应的 AgentActor 已经在内存中启动，这样它才能轮询并把任务状态从 accepted 切换为 executing
                 let _ = agent_manager
-                    .send(crate::agsnets::actor_agents::StartAgent { agent_id })
+                    .send(crate::agsnets::actor_agents_manage::StartAgent { agent_id })
                     .await;
 
                 if let Err(e) = sqlx::query(
@@ -233,8 +233,38 @@ impl Handler<QueryAllTasks> for DagOrchestrator {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-            let tasks: Vec<TaskInfoResponse> = rows.into_iter().map(TaskInfoResponse::from_row).collect();
+            let tasks: Vec<TaskInfoResponse> =
+                rows.into_iter().map(TaskInfoResponse::from_row).collect();
             Ok(tasks)
+        })
+    }
+}
+
+// 根据任务id查询任务
+#[derive(Message)]
+#[rtype(result = "Result<TaskInfoResponse, anyhow::Error>")]
+pub struct QueryTaskById(pub uuid::Uuid);
+
+impl Handler<QueryTaskById> for DagOrchestrator {
+    type Result = ResponseFuture<Result<TaskInfoResponse, anyhow::Error>>;
+
+    fn handle(&mut self, msg: QueryTaskById, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+
+        Box::pin(async move {
+            let row_opt = sqlx::query(
+                "SELECT t.id, t.depends_on, t.priority, t.status, t.name, t.description, t.workspace_name, a.name AS assigned_agent_name, t.created_at FROM tasks t LEFT JOIN agents a ON t.assigned_agent_id = a.id WHERE t.id = $1",
+            )
+            .bind(msg.0)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+            if let Some(row) = row_opt {
+                Ok(TaskInfoResponse::from_row(row))
+            } else {
+                Err(anyhow::anyhow!("task not found"))
+            }
         })
     }
 }

@@ -28,7 +28,7 @@ mod graph_memory;
 // MCP 配置管理
 mod mcp;
 
-use crate::agsnets::actor_agents::AgentManagerActor;
+use crate::agsnets::actor_agents_manage::AgentManagerActor;
 use crate::api::auth::Auth;
 use crate::channel::actor_messages::ChannelManagerActor;
 use crate::mcp::mcp_actor::McpAgentActor;

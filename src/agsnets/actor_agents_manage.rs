@@ -11,7 +11,10 @@ use std::time::Duration;
 use tracing::{error, info};
 
 use crate::{
-    agsnets::model::AgentError,
+    agsnets::{
+        actor_agent::{ActorLifecycle, AgentActor, GetLifecycle, RunAssignedTaskCheck},
+        model::AgentError,
+    },
     chat::openai_actor::OpenAIProxyActor,
     mcp::mcp_actor::McpAgentActor,
     task::dag_orchestrator::DagOrchestrator,
@@ -62,11 +65,6 @@ impl Actor for AgentManagerActor {
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
-        // 停止所有 AgentActor
-        for (agent_id, agent_addr) in self.agents.drain() {
-            //TODO 关闭 AgentActor
-            info!("Stopping AgentActor with ID: {}", agent_id);
-        }
         info!("AgentManageActor stopped");
     }
 }
@@ -144,7 +142,7 @@ impl Handler<StartAgent> for AgentManagerActor {
             lifecycle: ActorLifecycle::Starting,
             task_id: None,
             open_aiproxy_actor: self.open_aiproxy_actor.clone(),
-            mcp_manager: self.mcp_manager.clone(),
+            mcp_agent_actor: self.mcp_manager.clone(),
             dag_orchestrator: self.dag_orchestrator.clone(),
             pool: self.pool.clone(),
         };
@@ -308,16 +306,18 @@ impl Handler<TriggerAgentPoll> for AgentManagerActor {
 
     fn handle(&mut self, msg: TriggerAgentPoll, _ctx: &mut Self::Context) -> Self::Result {
         let addr_opt = self.agents.get(&msg.agent_id).cloned();
-        Box::pin(async move {
-            if let Some(addr) = addr_opt {
-                // 触发 AgentActor 执行一次立即检查
-                let _ = addr.send(RunAssignedTaskCheck {}).await;
-                Ok(())
-            } else {
-                Err(AgentError::Message("Agent not running".into()))
+        Box::pin(
+            async move {
+                if let Some(addr) = addr_opt {
+                    // 触发 AgentActor 执行一次立即检查
+                    let _ = addr.send(RunAssignedTaskCheck {}).await;
+                    Ok(())
+                } else {
+                    Err(AgentError::Message("Agent not running".into()))
+                }
             }
-        }
-        .into_actor(self))
+            .into_actor(self),
+        )
     }
 }
 
@@ -359,7 +359,7 @@ impl Handler<AutoScan> for AgentManagerActor {
                         lifecycle: ActorLifecycle::Starting,
                         task_id: None,
                         open_aiproxy_actor: open_aiproxy.clone(),
-                        mcp_manager: mcp.clone(),
+                        mcp_agent_actor: mcp.clone(),
                         dag_orchestrator: dag.clone(),
                         pool: actor.pool.clone(),
                     };
@@ -370,220 +370,5 @@ impl Handler<AutoScan> for AgentManagerActor {
                 }
             }
         }))
-    }
-}
-
-pub struct AgentActor {
-    id: AgentId,
-    lifecycle: ActorLifecycle,
-    task_id: Option<Uuid>, // 任务id
-    open_aiproxy_actor: Addr<OpenAIProxyActor>,
-    mcp_manager: Addr<McpAgentActor>,
-    dag_orchestrator: Addr<DagOrchestrator>,
-    pool: sqlx::PgPool,
-}
-
-// 触发 Agent 立即检查分配的任务并更新状态（用于手动触发）
-#[derive(Message)]
-#[rtype(result = "Result<(), ()>")]
-pub struct RunAssignedTaskCheck;
-
-/// Actor 生命周期快照（用于查询 Actor 本身的生命周期/连通性）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ActorLifecycle {
-    /// Actor 正在启动（已分配但尚未进入运行）
-    Starting,
-    /// Actor 正常运行
-    Running,
-    /// Actor 正在停止（进入停止流程）
-    Stopping,
-    /// Actor 已停止
-    Stopped,
-}
-
-impl Actor for AgentActor {
-    type Context = Context<Self>;
-
-    // 启动
-    fn started(&mut self, ctx: &mut Self::Context) {
-        self.lifecycle = ActorLifecycle::Starting;
-        info!("AgentActor {} started", self.id);
-
-        // 周期性检查：查找分配给该 Agent 且处于 accepted 的任务并标记为 executing
-        let interval = Duration::from_secs(5);
-        ctx.run_interval(interval, |actor, ctx| {
-            let pool = actor.pool.clone();
-            let agent_id = actor.id;
-
-            // 使用 actor-aware future 在异步 DB 操作完成后可以安全地访问并修改 actor 的状态
-            let work = async move {
-                match sqlx::query(
-                    "SELECT id, status FROM tasks WHERE assigned_agent_id = $1 AND status IN ('accepted','executing')",
-                )
-                .bind(agent_id)
-                .fetch_all(&pool)
-                .await
-                {
-                    Ok(rows) => {
-                        let mut any_started = false;
-                        for row in rows {
-                            // 读取 id 与 status
-                            let task_id_res = row.try_get::<Uuid, _>("id");
-                            let status_res = row.try_get::<String, _>("status");
-                            if let (Ok(task_id), Ok(status)) = (task_id_res, status_res) {
-                                match status.as_str() {
-                                    "accepted" => {
-                                        // 尝试从 accepted 切换到 executing
-                                        match sqlx::query("UPDATE tasks SET status = $1 WHERE id = $2")
-                                            .bind("executing")
-                                            .bind(task_id)
-                                            .execute(&pool)
-                                            .await
-                                        {
-                                            Ok(_) => {
-                                                tracing::info!(
-                                                    "Agent {} started task {}",
-                                                    agent_id,
-                                                    task_id
-                                                );
-                                                any_started = true;
-                                            }
-                                            Err(e) => tracing::error!(
-                                                "Failed to update task {} to executing: {}",
-                                                task_id,
-                                                e
-                                            ),
-                                        }
-                                    }
-                                    "executing" => {
-                                        // 任务已在执行中，视为需要继续运行
-                                        tracing::info!("Agent {} resuming executing task {}", agent_id, task_id);
-                                        any_started = true;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        Ok(any_started)
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to query assigned tasks for agent {}: {}",
-                            agent_id,
-                            e
-                        );
-                        Ok(false)
-                    }
-                }
-            };
-
-            // 将异步工作转换为 actor future，然后在回调中根据结果设置生命周期
-            ctx.spawn(
-                work.into_actor(actor)
-                    .map(|res: Result<bool, sqlx::Error>, actor, _ctx| {
-                        if let Ok(found) = res {
-                            if found {
-                                actor.lifecycle = ActorLifecycle::Running;
-                            }
-                        }
-                    }),
-            );
-        });
-    }
-
-    // 停止
-    fn stopped(&mut self, ctx: &mut Self::Context) {
-        self.lifecycle = ActorLifecycle::Stopped;
-        info!("AgentActor {} stopped", self.id);
-    }
-}
-
-// 轻量探测消息：用于检测 Actor 是否可达
-#[derive(Message)]
-#[rtype(result = "Result<(), ()>")]
-pub struct Ping;
-
-impl Handler<Ping> for AgentActor {
-    type Result = Result<(), ()>;
-    fn handle(&mut self, _msg: Ping, _ctx: &mut Self::Context) -> Self::Result {
-        Ok(())
-    }
-}
-
-// 生命周期查询消息：返回 ActorLifecycle 快照
-#[derive(Message)]
-#[rtype(result = "Result<ActorLifecycle, ()>")]
-pub struct GetLifecycle;
-
-impl Handler<GetLifecycle> for AgentActor {
-    type Result = Result<ActorLifecycle, ()>;
-    fn handle(&mut self, _msg: GetLifecycle, _ctx: &mut Self::Context) -> Self::Result {
-        Ok(self.lifecycle.clone())
-    }
-}
-
-impl Handler<RunAssignedTaskCheck> for AgentActor {
-    type Result = ResponseActFuture<Self, Result<(), ()>>;
-
-    fn handle(&mut self, _msg: RunAssignedTaskCheck, _ctx: &mut Self::Context) -> Self::Result {
-        let pool = self.pool.clone();
-        let agent_id = self.id;
-
-        let work = async move {
-            match sqlx::query(
-                "SELECT id, status FROM tasks WHERE assigned_agent_id = $1 AND status IN ('accepted','executing')",
-            )
-            .bind(agent_id)
-            .fetch_all(&pool)
-            .await
-            {
-                Ok(rows) => {
-                    let mut any_started = false;
-                    for row in rows {
-                        let task_id_res = row.try_get::<Uuid, _>("id");
-                        let status_res = row.try_get::<String, _>("status");
-                        if let (Ok(task_id), Ok(status)) = (task_id_res, status_res) {
-                            match status.as_str() {
-                                "accepted" => {
-                                    if let Err(e) = sqlx::query("UPDATE tasks SET status = $1 WHERE id = $2")
-                                        .bind("executing")
-                                        .bind(task_id)
-                                        .execute(&pool)
-                                        .await
-                                    {
-                                        tracing::error!("Failed to update task {} to executing: {}", task_id, e);
-                                    } else {
-                                        tracing::info!("Agent {} started task {}", agent_id, task_id);
-                                        any_started = true;
-                                    }
-                                }
-                                "executing" => {
-                                    tracing::info!("Agent {} resuming executing task {}", agent_id, task_id);
-                                    any_started = true;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Ok(any_started)
-                }
-                Err(e) => {
-                    tracing::error!("Failed to query assigned tasks for agent {}: {}", agent_id, e);
-                    Ok(false)
-                }
-            }
-        };
-
-        Box::pin(
-            work.into_actor(self).map(|res: Result<bool, sqlx::Error>, _actor, _ctx| {
-                if let Ok(found) = res {
-                    if found {
-                        // found assigned tasks (already updated to executing or resumed)
-                    }
-                }
-                Ok(())
-            }),
-        )
     }
 }
