@@ -3,7 +3,6 @@ use thiserror::Error;
 /// 错误类型
 #[derive(Debug, Error)]
 pub enum AgentError {
-    
     #[error("数据库操作失败: {0}")]
     DatabaseError(#[from] sqlx::Error),
 
@@ -23,4 +22,3 @@ pub enum AgentError {
     #[error("操作失败: {0}")]
     Message(String), // 通用的其他业务报错
 }
-

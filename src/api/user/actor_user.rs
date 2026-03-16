@@ -24,7 +24,7 @@ impl UserManagerActor {
 }
 
 /// Actor 消息：创建新用户（注册）
-#[derive(Message,Debug)]
+#[derive(Message, Debug)]
 #[rtype(result = "Result<User>")]
 pub struct CreateUser {
     pub username: String,
@@ -40,7 +40,6 @@ impl Handler<CreateUser> for UserManagerActor {
         let pool = self.pool.clone();
 
         Box::pin(async move {
-
             let user = sqlx::query_as::<_, User>(
                 r#"
                 INSERT INTO users (username, password_hash, email)

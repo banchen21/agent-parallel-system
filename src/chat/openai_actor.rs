@@ -1,8 +1,7 @@
 use actix::prelude::*;
 use async_openai::config::OpenAIConfig;
 use async_openai::types::chat::{
-    ChatCompletionRequestMessage, ChatCompletionToolChoiceOption,
-    CreateChatCompletionRequestArgs,
+    ChatCompletionRequestMessage, ChatCompletionToolChoiceOption, CreateChatCompletionRequestArgs,
 };
 use async_openai::{Client, types::chat::ChatCompletionTools};
 use std::collections::HashMap;
@@ -105,11 +104,7 @@ pub struct OpenAIProxyActor {
 }
 
 impl OpenAIProxyActor {
-    pub fn new(
-        default: ProviderConfig,
-        timeout_secs: u64,
-        max_tokens: u32,
-    ) -> Self {
+    pub fn new(default: ProviderConfig, timeout_secs: u64, max_tokens: u32) -> Self {
         let mut providers = HashMap::new();
         let name = default.name.clone();
         providers.insert(
@@ -262,11 +257,13 @@ impl Handler<CallOpenAI> for OpenAIProxyActor {
                 }
             }
 
-            error!("[{}] 调用在 {} 次重试后仍然失败", provider_name, max_retries);
+            error!(
+                "[{}] 调用在 {} 次重试后仍然失败",
+                provider_name, max_retries
+            );
             Err(last_err)
         };
 
         Box::pin(fut.into_actor(self))
     }
 }
-

@@ -20,6 +20,47 @@ pub struct TaskTableModel {
     pub created_at: DateTime<Utc>,
 }
 
+/// 对外返回的任务信息（包含可读的 agent 名称）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskInfo {
+    pub id: TaskId,
+    pub depends_on: Vec<TaskId>,
+    pub priority: String,
+    pub status: TaskStatus,
+    pub name: String,
+    pub description: String,
+    pub workspace_name: Option<String>,
+    /// 把原来的 assigned_agent_id 改为 agent 的可读名称
+    pub assigned_agent_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl TaskInfo {
+    pub fn from_row(row: sqlx::postgres::PgRow) -> Self {
+        Self {
+            id: row.get("id"),
+            depends_on: row.get("depends_on"),
+            priority: row.get("priority"),
+            status: match row.get::<String, _>("status").as_str() {
+                "published" => TaskStatus::Published,
+                "accepted" => TaskStatus::Accepted,
+                "executing" => TaskStatus::Executing,
+                "submitted" => TaskStatus::Submitted,
+                "under_review" => TaskStatus::Reviewing,
+                "completed_success" => TaskStatus::CompletedSuccess,
+                "completed_failure" => TaskStatus::CompletedFailure,
+                "cancelled" => TaskStatus::Cancelled,
+                _ => TaskStatus::Published,
+            },
+            name: row.get("name"),
+            description: row.get("description"),
+            workspace_name: row.get("workspace_name"),
+            assigned_agent_name: row.get::<Option<String>, _>("assigned_agent_name"),
+            created_at: row.get("created_at"),
+        }
+    }
+}
+
 impl TaskTableModel {
     pub fn from_row(row: sqlx::postgres::PgRow) -> Self {
         Self {

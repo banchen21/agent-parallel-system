@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use crate::{
     agsnets::actor_agents::AgentManagerActor,
     channel::actor_messages::ChannelManagerActor,
-    task::model::{TaskItem, TaskTableModel},
+    task::model::{TaskItem, TaskTableModel, TaskInfo},
     workspace::workspace_actor::{GetWorkspaces, WorkspaceManageActor},
 };
 
@@ -16,7 +16,7 @@ pub struct DagOrchestrator {
     /// 消息通道
     channel_manager_actor: Addr<ChannelManagerActor>,
     // 工作空间
-    workspace_manager_actor: Addr<WorkspaceManageActor>
+    workspace_manager_actor: Addr<WorkspaceManageActor>,
 }
 
 impl DagOrchestrator {
@@ -85,88 +85,109 @@ pub struct SubmitTask {
 }
 
 impl Handler<SubmitTask> for DagOrchestrator {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: SubmitTask, _ctx: &mut Self::Context) -> Self::Result {
-        let this = self.clone();
+        let pool = self.pool.clone();
+        let agent_manager = self.agent_manager_actor.clone();
+        let workspace_manager = self.workspace_manager_actor.clone();
         let task = msg.task.clone();
-        let task_id = uuid::Uuid::new_v4();
-        let save_id = task_id.clone();
+        let user_name = msg.user_name.clone();
 
-        let this_clone = self.clone();
-        // 检测是否存在空工作空间
-        tokio::spawn({
-            let workspace_manager_actor = this_clone.workspace_manager_actor.clone();
-            let user_name = msg.user_name.clone();
-            async move {
-                if let Err(e) = this.save_task_to_db(save_id, task.clone()).await {
-                    tracing::error!("Failed to save task to database: {}", e);
+        Box::pin(async move {
+            // 1) 插入任务（同步）
+            let task_id = uuid::Uuid::new_v4();
+            let insert_res = sqlx::query(
+                r#"INSERT INTO tasks (id, depends_on, priority, status, name, description, workspace_name, assigned_agent_id, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)"#,
+            )
+            .bind(task_id)
+            .bind(&Vec::<uuid::Uuid>::new())
+            .bind(&task.priority.as_str())
+            .bind("published")
+            .bind(&task.name)
+            .bind(&task.description)
+            .bind::<Option<String>>(None)
+            .bind::<Option<uuid::Uuid>>(None)
+            .bind(chrono::Utc::now())
+            .execute(&pool)
+            .await;
+
+            if let Err(e) = insert_res {
+                tracing::error!("Failed to insert task to DB: {}", e);
+                return;
+            }
+
+            // 2) 选择工作区
+            let workspaces_res = workspace_manager.send(GetWorkspaces(user_name.clone())).await;
+            let workspace_opt = match workspaces_res {
+                Ok(Ok(ws)) => ws.into_iter().next(),
+                Ok(Err(e)) => {
+                    tracing::error!("GetWorkspaces returned error: {}", e);
+                    None
                 }
-                let workspaces = workspace_manager_actor
-                    .send(GetWorkspaces(user_name.clone()))
-                    .await;
-                match workspaces {
-                    Ok(Ok(workspaces)) => {
-                        if workspaces.is_empty() {
-                            tracing::warn!("No workspaces found when submitting task");
-                        } else {
-                            // 兼容旧/新数据库：不依赖 `status` 字段，优先选择返回列表的第一个工作区
-                            let workspace = workspaces.into_iter().next();
-                            if workspace.is_none() {
-                                tracing::warn!("No active workspace found for user: {}", user_name);
-                                return;
-                            }
-                            let workspace = workspace.unwrap();
-                            // 检测是否有空闲的agent
-                            let agent_id = match this_clone
-                                .agent_manager_actor
-                                .send(crate::agsnets::actor_agents::CheckAvailableAgent {
-                                    workspace_name: workspace.name.clone(),
-                                    user_name: user_name.clone(),
-                                })
-                                .await
-                            {
-                                Ok(d) => match d {
-                                    Ok(agent_id) => agent_id,
-                                    Err(e) => {
-                                        tracing::error!("Failed to check available agent: {}", e);
-                                        return;
-                                    }
-                                },
-                                Err(_) => {
-                                    tracing::error!("Failed to send CheckAvailableAgent message");
-                                    return;
-                                }
-                            };
-                            // 将任务分配到工作空间与 Agent：更新任务记录的 workspace_name、assigned_agent_id、status
-                            let pool = this_clone.pool.clone();
-                            let workspace_name = workspace.name.clone();
-                            let task_id = task_id.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = sqlx::query(
-                                    "UPDATE tasks SET workspace_name=$1, assigned_agent_id=$2, status=$3 WHERE id=$4",
-                                )
-                                .bind(workspace_name.clone())
-                                .bind(agent_id)
-                                .bind("accepted")
-                                .bind(task_id)
-                                .execute(&pool)
-                                .await
-                                {
-                                    tracing::error!("Failed to update task assignment: {}", e);
-                                } else {
-                                    tracing::info!("Task assigned {} -> {}", task_id, workspace_name);
-                                }
-                            });
-                        }
-                    }
-                    Ok(Err(e)) => tracing::error!("Failed to get workspaces: {}", e),
-                    Err(e) => tracing::error!("Failed to send GetWorkspaces message: {}", e),
+                Err(e) => {
+                    tracing::error!("GetWorkspaces mailbox error: {}", e);
+                    None
+                }
+            };
+
+            let workspace_name = if let Some(ws) = workspace_opt {
+                ws.name
+            } else {
+                tracing::warn!("No workspace found for user {} when submitting task", user_name);
+                return;
+            };
+
+            // 3) 同步询问可用 agent
+            let agent_res = agent_manager
+                .send(crate::agsnets::actor_agents::CheckAvailableAgent {
+                    workspace_name: workspace_name.clone(),
+                    user_name: user_name.clone(),
+                })
+                .await;
+
+            let assigned_agent = match agent_res {
+                Ok(Ok(agent_id)) => Some(agent_id),
+                Ok(Err(e)) => {
+                    tracing::error!("CheckAvailableAgent returned error: {}", e);
+                    None
+                }
+                Err(e) => {
+                    tracing::error!("CheckAvailableAgent mailbox error: {}", e);
+                    None
+                }
+            };
+
+            // 4) 更新任务表（同步）
+            if let Some(agent_id) = assigned_agent {
+                if let Err(e) = sqlx::query(
+                    "UPDATE tasks SET workspace_name=$1, assigned_agent_id=$2, status=$3 WHERE id=$4",
+                )
+                .bind(workspace_name.clone())
+                .bind(agent_id)
+                .bind("accepted")
+                .bind(task_id)
+                .execute(&pool)
+                .await
+                {
+                    tracing::error!("Failed to update task assignment: {}", e);
+                } else {
+                    tracing::info!("Task assigned {} -> {}", task_id, workspace_name);
+                }
+            } else {
+                if let Err(e) = sqlx::query("UPDATE tasks SET workspace_name=$1 WHERE id=$2")
+                    .bind(workspace_name.clone())
+                    .bind(task_id)
+                    .execute(&pool)
+                    .await
+                {
+                    tracing::error!("Failed to update task workspace: {}", e);
                 }
             }
-        });
 
-        println!("Received task: {:?}", msg.task);
+        }
+        .into_actor(self))
     }
 }
 
@@ -189,25 +210,25 @@ impl Handler<SaveTaskToDb> for DagOrchestrator {
 
 // 查询所有任务
 #[derive(Message)]
-#[rtype(result = "Result<Vec<TaskTableModel>, anyhow::Error>")]
+#[rtype(result = "Result<Vec<TaskInfo>, anyhow::Error>")]
 pub struct QueryAllTasks(pub String);
 
 impl Handler<QueryAllTasks> for DagOrchestrator {
-    type Result = ResponseFuture<Result<Vec<TaskTableModel>, anyhow::Error>>;
+    type Result = ResponseFuture<Result<Vec<TaskInfo>, anyhow::Error>>;
 
     fn handle(&mut self, msg: QueryAllTasks, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
         Box::pin(async move {
+            // LEFT JOIN agents 获取 assigned agent 的 name
             let rows = sqlx::query(
-                "SELECT id, depends_on, priority, status, name, description, workspace_name, assigned_agent_id, created_at FROM tasks WHERE workspace_name IN (SELECT name FROM workspaces WHERE owner_username = $1)",
+                "SELECT t.id, t.depends_on, t.priority, t.status, t.name, t.description, t.workspace_name, a.name AS assigned_agent_name, t.created_at FROM tasks t LEFT JOIN agents a ON t.assigned_agent_id = a.id WHERE t.workspace_name IN (SELECT name FROM workspaces WHERE owner_username = $1)",
             )
             .bind(msg.0)
             .fetch_all(&pool)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-            let tasks: Vec<TaskTableModel> =
-                rows.into_iter().map(TaskTableModel::from_row).collect();
+            let tasks: Vec<TaskInfo> = rows.into_iter().map(TaskInfo::from_row).collect();
             Ok(tasks)
         })
     }

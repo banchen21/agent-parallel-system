@@ -3,9 +3,12 @@ use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, delete, get, 
 use serde_json::json;
 use tracing::error;
 
-use crate::{utils::handler_util::get_user_name, workspace::workspace_actor::{
-    CreateWorkspace, DeleteWorkspace, GetWorkspaces, WorkspaceManageActor,
-}};
+use crate::{
+    utils::handler_util::get_user_name,
+    workspace::workspace_actor::{
+        CreateWorkspace, DeleteWorkspace, GetWorkspaces, WorkspaceManageActor,
+    },
+};
 
 // 查询
 #[get("/workspace")]
@@ -19,7 +22,10 @@ async fn get_workspace_handler(
     };
 
     // 发送消息给 Actor
-    match workspace_manage_actor.send(GetWorkspaces(user_name.to_string())).await {
+    match workspace_manage_actor
+        .send(GetWorkspaces(user_name.to_string()))
+        .await
+    {
         Ok(workspace) => match workspace {
             Ok(workspace) => HttpResponse::Ok().json(workspace),
             Err(e) => HttpResponse::BadRequest().body(e.to_string()),

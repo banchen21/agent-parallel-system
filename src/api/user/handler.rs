@@ -53,7 +53,11 @@ pub async fn register(
             tokio::spawn(async move {
                 match ws_actor.send(create).await {
                     Ok(Ok(_)) => {
-                        tracing::info!("Created default workspace for {}: {}", owner, workspace_name);
+                        tracing::info!(
+                            "Created default workspace for {}: {}",
+                            owner,
+                            workspace_name
+                        );
                         // 创建默认 Agent（executor）
                         let agent_req = CreateAgent {
                             user_name: owner.clone(),

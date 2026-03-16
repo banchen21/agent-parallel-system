@@ -41,7 +41,11 @@ impl McpAgentActor {
             }
         };
 
-        Self { open_aiproxy_actor, mcp_list, prompt }
+        Self {
+            open_aiproxy_actor,
+            mcp_list,
+            prompt,
+        }
     }
 
     /// 从 .mcps 目录加载所有配置
@@ -69,8 +73,6 @@ impl McpAgentActor {
 
         Ok(config_list)
     }
-
-
 }
 
 impl Actor for McpAgentActor {
@@ -96,6 +98,9 @@ impl Handler<ExecuteMcp> for McpAgentActor {
         let _mcp_list = self.mcp_list.clone();
         let _prompt = self.prompt.clone();
         // 占位实现：目前尚未实现具体执行逻辑，返回明确的错误以便编译通过并可逐步完善
-        Box::pin(async move { Err(McpError::Message("ExecuteMcp not implemented".into())) }.into_actor(self))
+        Box::pin(
+            async move { Err(McpError::Message("ExecuteMcp not implemented".into())) }
+                .into_actor(self),
+        )
     }
 }

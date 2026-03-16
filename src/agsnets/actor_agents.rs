@@ -18,25 +18,6 @@ use crate::{
     workspace::model::{AgentId, AgentInfo, AgentKind},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentStatus {
-    /// 工作中：正在处理任务
-    Working,
-    /// 空闲：任务已完成，等待下一个任务
-    Idle,
-}
-
-impl AgentStatus {
-    /// 返回中文状态标签
-    pub fn label(&self) -> &'static str {
-        match self {
-            AgentStatus::Working => "工作中",
-            AgentStatus::Idle => "空闲",
-        }
-    }
-}
-
 pub struct AgentManagerActor {
     pool: sqlx::PgPool,
     agents: HashMap<AgentId, Addr<AgentActor>>,
@@ -106,7 +87,6 @@ impl Handler<CreateAgent> for AgentManagerActor {
     type Result = ResponseActFuture<Self, Result<AgentInfo, AgentError>>;
     fn handle(&mut self, msg: CreateAgent, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
-
         Box::pin(
             async move {
                 // 生成 UUID
@@ -132,6 +112,7 @@ impl Handler<CreateAgent> for AgentManagerActor {
                         kind: msg.kind,
                         workspace_name: msg.workspace_name,
                         owner_username: msg.user_name,
+                        status: String::from("stopped"),
                         mcp_list: msg.mcp_list,
                     }),
                     Err(e) => Err(AgentError::DatabaseError(e)),
@@ -200,6 +181,8 @@ impl Handler<ListAgents> for AgentManagerActor {
     type Result = ResponseActFuture<Self, Result<Vec<AgentInfo>, AgentError>>;
     fn handle(&mut self, msg: ListAgents, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
+        // 快照当前内存中的 Agent addr，用于在异步查询中获取生命周期
+        let agents_map = self.agents.clone();
 
         Box::pin(
             async move {
@@ -218,12 +201,31 @@ impl Handler<ListAgents> for AgentManagerActor {
                             let workspace_name: String = row.try_get("workspace_name").map_err(AgentError::DatabaseError)?;
                             let owner_username: String = row.try_get("owner_username").map_err(AgentError::DatabaseError)?;
 
+                            // 默认状态为 stopped（数据库存在但未在内存中运行）
+                            let mut status = String::from("stopped");
+                            if let Some(addr) = agents_map.get(&id) {
+                                // 显式标注 await 的返回类型以帮助类型推断
+                                let lifecycle_res: Result<Result<ActorLifecycle, ()>, actix::MailboxError> = addr.send(GetLifecycle {}).await;
+                                match lifecycle_res {
+                                    Ok(Ok(lc)) => {
+                                        status = match lc {
+                                            ActorLifecycle::Starting => String::from("starting"),
+                                            ActorLifecycle::Running => String::from("running"),
+                                            ActorLifecycle::Stopping => String::from("stopping"),
+                                            ActorLifecycle::Stopped => String::from("stopped"),
+                                        }
+                                    }
+                                    _ => status = String::from("unknown"),
+                                }
+                            }
+
                             list.push(AgentInfo {
                                 id,
                                 name,
                                 kind: AgentKind::from_db_str(&kind_str),
                                 workspace_name,
                                 owner_username,
+                                status,
                                 mcp_list: vec![],
                             });
                         }
@@ -264,9 +266,10 @@ impl Handler<CheckAvailableAgent> for AgentManagerActor {
                 for (id, addr) in agents_snapshot.into_iter() {
                     match addr.send(GetLifecycle {}).await {
                         Ok(Ok(lc)) => {
-                            if matches!(lc, ActorLifecycle::Starting) {
-                                return Ok(id);
-                            }
+                                // 只把处于 Running 的 Actor 视为可用
+                                if matches!(lc, ActorLifecycle::Running) {
+                                    return Ok(id);
+                                }
                         }
                         _ => continue,
                     }
@@ -386,7 +389,7 @@ impl Actor for AgentActor {
             // 使用 actor-aware future 在异步 DB 操作完成后可以安全地访问并修改 actor 的状态
             let work = async move {
                 match sqlx::query(
-                    "SELECT id FROM tasks WHERE assigned_agent_id = $1 AND status = 'accepted'",
+                    "SELECT id, status FROM tasks WHERE assigned_agent_id = $1 AND status IN ('accepted','executing')",
                 )
                 .bind(agent_id)
                 .fetch_all(&pool)
@@ -395,26 +398,40 @@ impl Actor for AgentActor {
                     Ok(rows) => {
                         let mut any_started = false;
                         for row in rows {
-                            if let Ok(task_id) = row.try_get::<Uuid, &str>("id") {
-                                match sqlx::query("UPDATE tasks SET status = $1 WHERE id = $2")
-                                    .bind("executing")
-                                    .bind(task_id)
-                                    .execute(&pool)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        tracing::info!(
-                                            "Agent {} started task {}",
-                                            agent_id,
-                                            task_id
-                                        );
+                            // 读取 id 与 status
+                            let task_id_res = row.try_get::<Uuid, _>("id");
+                            let status_res = row.try_get::<String, _>("status");
+                            if let (Ok(task_id), Ok(status)) = (task_id_res, status_res) {
+                                match status.as_str() {
+                                    "accepted" => {
+                                        // 尝试从 accepted 切换到 executing
+                                        match sqlx::query("UPDATE tasks SET status = $1 WHERE id = $2")
+                                            .bind("executing")
+                                            .bind(task_id)
+                                            .execute(&pool)
+                                            .await
+                                        {
+                                            Ok(_) => {
+                                                tracing::info!(
+                                                    "Agent {} started task {}",
+                                                    agent_id,
+                                                    task_id
+                                                );
+                                                any_started = true;
+                                            }
+                                            Err(e) => tracing::error!(
+                                                "Failed to update task {} to executing: {}",
+                                                task_id,
+                                                e
+                                            ),
+                                        }
+                                    }
+                                    "executing" => {
+                                        // 任务已在执行中，视为需要继续运行
+                                        tracing::info!("Agent {} resuming executing task {}", agent_id, task_id);
                                         any_started = true;
                                     }
-                                    Err(e) => tracing::error!(
-                                        "Failed to update task {} to executing: {}",
-                                        task_id,
-                                        e
-                                    ),
+                                    _ => {}
                                 }
                             }
                         }

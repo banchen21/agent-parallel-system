@@ -79,6 +79,9 @@ pub struct AgentInfo {
     /// 所属工作空间名称（必须为已存在的工作区）
     pub workspace_name: String,
     pub owner_username: String,
+    /// 当前 Actor 生命周期/状态（"starting"/"running"/"stopping"/"stopped"/"unknown"）
+    #[serde(default)]
+    pub status: String,
     /// 智能体可用的 MCP 工具列表
     #[serde(default)]
     pub mcp_list: Vec<String>,

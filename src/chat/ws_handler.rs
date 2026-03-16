@@ -26,7 +26,7 @@ struct WsIncoming {
     content: String,
     #[serde(default = "default_device")]
     device_type: String,
-} 
+}
 
 fn default_device() -> String {
     "web".to_string()
@@ -51,9 +51,7 @@ enum WsOutgoing {
         created_at: String,
     },
     /// 错误通知
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 // ─── WS Session Actor ─────────────────────────────────────────────
@@ -127,8 +125,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                     Ok(v) => v,
                     Err(_) => {
                         let err = serde_json::to_string(&WsOutgoing::Error {
-                            message: "消息格式错误，请发送 JSON：{\"content\":\"...\"}"
-                                .to_string(),
+                            message: "消息格式错误，请发送 JSON：{\"content\":\"...\"}".to_string(),
                         })
                         .unwrap_or_default();
                         ctx.text(err);
@@ -190,9 +187,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for ChatWsSession {
                                             sender: ai_name.clone(),
                                             source_ip: "127.0.0.1".to_string(),
                                             device_type: "local".to_string(),
-                                            content: MessageContent::Text(
-                                                chat_msg.content.clone(),
-                                            ),
+                                            content: MessageContent::Text(chat_msg.content.clone()),
                                             created_at: Utc::now(),
                                         },
                                     })
@@ -259,7 +254,6 @@ pub async fn ws_chat_handler(
     chat_agent: web::Data<Addr<ChatAgent>>,
     channel_manager: web::Data<Addr<ChannelManagerActor>>,
     agent_memory: web::Data<Addr<AgentMemoryActor>>,
-    
 ) -> ActixResult<HttpResponse> {
     // 验证 JWT
     let username = match validate_token(&query.token) {

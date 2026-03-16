@@ -1,11 +1,11 @@
-use neo4rs::*;
-use serde::{Deserialize, Serialize};
-use tracing::debug;
-use tracing::warn;
-use std::collections::HashMap;
-use std::fmt::Write;
 use anyhow::Result;
 use anyhow::anyhow;
+use neo4rs::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::Write;
+use tracing::debug;
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
@@ -216,7 +216,6 @@ pub fn format_graph_to_string(result: &ThreeLayerResult) -> String {
 
     out // 返回最终生成的字符串
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum OperationType {

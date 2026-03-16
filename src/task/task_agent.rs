@@ -113,7 +113,6 @@ impl Handler<OtherMessage> for TaskAgent {
     fn handle(&mut self, msg: OtherMessage, _ctx: &mut Self::Context) -> Self::Result {
         let this = self.clone();
 
-
         Box::pin(async move {
             // 1. 获取长期记忆
             let long_term_memory = msg.long_term_memory;

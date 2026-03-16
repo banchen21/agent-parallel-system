@@ -3,7 +3,7 @@ use actix_web::{HttpRequest, HttpResponse, Responder, delete, get, post, put, we
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::agsnets::actor_agents::{AgentManagerActor, AgentStatus, CreateAgent, ListAgents};
+use crate::agsnets::actor_agents::{AgentManagerActor, CreateAgent, ListAgents};
 use sqlx::Row;
 
 // 创建 agent

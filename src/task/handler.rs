@@ -2,7 +2,7 @@ use actix::Addr;
 use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
 
 use crate::task::dag_orchestrator::{DagOrchestrator, QueryAllTasks, SubmitTask};
-use crate::task::model::{TaskItem, TaskTableModel};
+use crate::task::model::{TaskItem, TaskInfo};
 
 #[get("/tasks")]
 pub async fn list_tasks_handler(
@@ -32,7 +32,10 @@ pub async fn create_task_handler(
     };
     let task = body.into_inner();
     match dag_orchestrator
-        .send(SubmitTask { user_name: user_name.clone(), task })
+        .send(SubmitTask {
+            user_name: user_name.clone(),
+            task,
+        })
         .await
     {
         Ok(()) => HttpResponse::Accepted().finish(),
