@@ -61,6 +61,57 @@ impl TaskInfo {
     }
 }
 
+/// 前端期望的任务信息格式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskInfoResponse {
+    pub id: TaskId,
+    pub name: String,
+    pub description: String,
+    pub priority: String,
+    pub status: String,
+    pub status_label: String,
+    pub status_group: String,
+    pub due_date: Option<String>,
+    pub assigned_agent_id: Option<String>,
+    pub assigned_agent_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl TaskInfoResponse {
+    pub fn from_row(row: sqlx::postgres::PgRow) -> Self {
+        let status_str: String = row.get("status");
+        let (status_label, status_group) = match status_str.as_str() {
+            "published" => ("等待中".to_string(), "pending".to_string()),
+            "accepted" => ("已接取".to_string(), "pending".to_string()),
+            "executing" => ("执行中".to_string(), "running".to_string()),
+            "submitted" => ("已提交".to_string(), "running".to_string()),
+            "under_review" => ("审阅中".to_string(), "running".to_string()),
+            "completed_success" => ("已完成".to_string(), "completed".to_string()),
+            "completed_failure" => ("失败".to_string(), "failed".to_string()),
+            "cancelled" => ("已取消".to_string(), "failed".to_string()),
+            _ => ("等待中".to_string(), "pending".to_string()),
+        };
+
+        let created_at: DateTime<Utc> = row.get("created_at");
+
+        Self {
+            id: row.get("id"),
+            name: row.get("name"),
+            description: row.get("description"),
+            priority: row.get("priority"),
+            status: status_str,
+            status_label,
+            status_group,
+            due_date: None,
+            assigned_agent_id: None,
+            assigned_agent_name: row.get::<Option<String>, _>("assigned_agent_name"),
+            created_at,
+            updated_at: created_at,
+        }
+    }
+}
+
 impl TaskTableModel {
     pub fn from_row(row: sqlx::postgres::PgRow) -> Self {
         Self {

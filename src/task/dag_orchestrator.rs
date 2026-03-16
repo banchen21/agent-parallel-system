@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use crate::{
     agsnets::actor_agents::AgentManagerActor,
     channel::actor_messages::ChannelManagerActor,
-    task::model::{TaskItem, TaskTableModel, TaskInfo},
+    task::model::{TaskItem, TaskTableModel, TaskInfo, TaskInfoResponse},
     workspace::workspace_actor::{GetWorkspaces, WorkspaceManageActor},
 };
 
@@ -161,6 +161,11 @@ impl Handler<SubmitTask> for DagOrchestrator {
 
             // 4) 更新任务表（同步）
             if let Some(agent_id) = assigned_agent {
+                // 确保对应的 AgentActor 已经在内存中启动，这样它才能轮询并把任务状态从 accepted 切换为 executing
+                let _ = agent_manager
+                    .send(crate::agsnets::actor_agents::StartAgent { agent_id })
+                    .await;
+
                 if let Err(e) = sqlx::query(
                     "UPDATE tasks SET workspace_name=$1, assigned_agent_id=$2, status=$3 WHERE id=$4",
                 )
@@ -210,11 +215,11 @@ impl Handler<SaveTaskToDb> for DagOrchestrator {
 
 // 查询所有任务
 #[derive(Message)]
-#[rtype(result = "Result<Vec<TaskInfo>, anyhow::Error>")]
+#[rtype(result = "Result<Vec<TaskInfoResponse>, anyhow::Error>")]
 pub struct QueryAllTasks(pub String);
 
 impl Handler<QueryAllTasks> for DagOrchestrator {
-    type Result = ResponseFuture<Result<Vec<TaskInfo>, anyhow::Error>>;
+    type Result = ResponseFuture<Result<Vec<TaskInfoResponse>, anyhow::Error>>;
 
     fn handle(&mut self, msg: QueryAllTasks, _ctx: &mut Self::Context) -> Self::Result {
         let pool = self.pool.clone();
@@ -228,7 +233,7 @@ impl Handler<QueryAllTasks> for DagOrchestrator {
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-            let tasks: Vec<TaskInfo> = rows.into_iter().map(TaskInfo::from_row).collect();
+            let tasks: Vec<TaskInfoResponse> = rows.into_iter().map(TaskInfoResponse::from_row).collect();
             Ok(tasks)
         })
     }

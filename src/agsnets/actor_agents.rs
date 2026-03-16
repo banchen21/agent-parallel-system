@@ -248,6 +248,13 @@ pub struct CheckAvailableAgent {
     pub user_name: String,
 }
 
+// 触发指定 Agent 立即检查并启动分配给它的任务
+#[derive(Message)]
+#[rtype(result = "Result<(), AgentError>")]
+pub struct TriggerAgentPoll {
+    pub agent_id: AgentId,
+}
+
 impl Handler<CheckAvailableAgent> for AgentManagerActor {
     type Result = ResponseActFuture<Self, Result<AgentId, AgentError>>;
     fn handle(&mut self, _msg: CheckAvailableAgent, _ctx: &mut Self::Context) -> Self::Result {
@@ -293,6 +300,24 @@ impl Handler<CheckAvailableAgent> for AgentManagerActor {
             }
             .into_actor(self),
         )
+    }
+}
+
+impl Handler<TriggerAgentPoll> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, Result<(), AgentError>>;
+
+    fn handle(&mut self, msg: TriggerAgentPoll, _ctx: &mut Self::Context) -> Self::Result {
+        let addr_opt = self.agents.get(&msg.agent_id).cloned();
+        Box::pin(async move {
+            if let Some(addr) = addr_opt {
+                // 触发 AgentActor 执行一次立即检查
+                let _ = addr.send(RunAssignedTaskCheck {}).await;
+                Ok(())
+            } else {
+                Err(AgentError::Message("Agent not running".into()))
+            }
+        }
+        .into_actor(self))
     }
 }
 
@@ -357,6 +382,11 @@ pub struct AgentActor {
     dag_orchestrator: Addr<DagOrchestrator>,
     pool: sqlx::PgPool,
 }
+
+// 触发 Agent 立即检查分配的任务并更新状态（用于手动触发）
+#[derive(Message)]
+#[rtype(result = "Result<(), ()>")]
+pub struct RunAssignedTaskCheck;
 
 /// Actor 生命周期快照（用于查询 Actor 本身的生命周期/连通性）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,5 +520,70 @@ impl Handler<GetLifecycle> for AgentActor {
     type Result = Result<ActorLifecycle, ()>;
     fn handle(&mut self, _msg: GetLifecycle, _ctx: &mut Self::Context) -> Self::Result {
         Ok(self.lifecycle.clone())
+    }
+}
+
+impl Handler<RunAssignedTaskCheck> for AgentActor {
+    type Result = ResponseActFuture<Self, Result<(), ()>>;
+
+    fn handle(&mut self, _msg: RunAssignedTaskCheck, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+        let agent_id = self.id;
+
+        let work = async move {
+            match sqlx::query(
+                "SELECT id, status FROM tasks WHERE assigned_agent_id = $1 AND status IN ('accepted','executing')",
+            )
+            .bind(agent_id)
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(rows) => {
+                    let mut any_started = false;
+                    for row in rows {
+                        let task_id_res = row.try_get::<Uuid, _>("id");
+                        let status_res = row.try_get::<String, _>("status");
+                        if let (Ok(task_id), Ok(status)) = (task_id_res, status_res) {
+                            match status.as_str() {
+                                "accepted" => {
+                                    if let Err(e) = sqlx::query("UPDATE tasks SET status = $1 WHERE id = $2")
+                                        .bind("executing")
+                                        .bind(task_id)
+                                        .execute(&pool)
+                                        .await
+                                    {
+                                        tracing::error!("Failed to update task {} to executing: {}", task_id, e);
+                                    } else {
+                                        tracing::info!("Agent {} started task {}", agent_id, task_id);
+                                        any_started = true;
+                                    }
+                                }
+                                "executing" => {
+                                    tracing::info!("Agent {} resuming executing task {}", agent_id, task_id);
+                                    any_started = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Ok(any_started)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to query assigned tasks for agent {}: {}", agent_id, e);
+                    Ok(false)
+                }
+            }
+        };
+
+        Box::pin(
+            work.into_actor(self).map(|res: Result<bool, sqlx::Error>, _actor, _ctx| {
+                if let Ok(found) = res {
+                    if found {
+                        // found assigned tasks (already updated to executing or resumed)
+                    }
+                }
+                Ok(())
+            }),
+        )
     }
 }

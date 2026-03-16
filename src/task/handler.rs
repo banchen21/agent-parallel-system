@@ -2,7 +2,7 @@ use actix::Addr;
 use actix_web::{HttpRequest, HttpResponse, Responder, get, post, web};
 
 use crate::task::dag_orchestrator::{DagOrchestrator, QueryAllTasks, SubmitTask};
-use crate::task::model::{TaskItem, TaskInfo};
+use crate::task::model::{TaskItem, TaskInfoResponse};
 
 #[get("/tasks")]
 pub async fn list_tasks_handler(
