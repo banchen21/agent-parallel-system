@@ -1,27 +1,20 @@
-use actix::{Actor, ActorFutureExt, Context, Handler, Message, ResponseActFuture, WrapFuture};
+use actix::{Actor, Context, Handler, Message, ResponseActFuture, WrapFuture};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use tokio::process::Command;
-use tokio::time::{Duration, timeout};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::chat::openai_actor::OpenAIProxyActor;
-use crate::mcp;
-use crate::mcp::model::{McpConfig, McpError};
+use crate::mcp::model::{McpError, McpToolDefinition};
+use crate::workspace::model::AgentId;
 
 const MCPS_DIR: &str = ".mcps";
 
 pub struct McpAgentActor {
     open_aiproxy_actor: actix::Addr<OpenAIProxyActor>,
-    mcp_list: HashMap<String, McpConfig>,
+    mcp_list: HashMap<String, McpToolDefinition>,
     prompt: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpExecutionResult {
-    pub output: String,
 }
 
 impl McpAgentActor {
@@ -49,7 +42,7 @@ impl McpAgentActor {
     }
 
     /// 从 .mcps 目录加载所有配置
-    fn load_all_configs(mcp_dir: &PathBuf) -> Result<HashMap<String, McpConfig>, McpError> {
+    fn load_all_configs(mcp_dir: &PathBuf) -> Result<HashMap<String, McpToolDefinition>, McpError> {
         let mut config_list = HashMap::new();
 
         if !mcp_dir.exists() {
@@ -64,15 +57,24 @@ impl McpAgentActor {
                 && path.file_name().and_then(|s| s.to_str()) != Some("README.md")
             {
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(config) = serde_json::from_str::<McpConfig>(&content) {
-                        config_list.insert(config.name.clone(), config);
+                    if let Ok(config) = serde_json::from_str::<McpToolDefinition>(&content) {
+                        config_list.insert(config.tool_id.clone(), config);
                     }
                 }
             }
         }
-
+        let mcp_tool_definition= McpToolDefinition::default();
+        debug!("Loaded MCP configs: {:#?}", mcp_tool_definition);
         Ok(config_list)
     }
+
+    // mcp工具创建
+    pub async fn create_mcp_tool(&mut self) -> Result<(), McpError> {
+        // 创建WSAM工具
+        // 调用 OpenAI API 创建工具定义
+        Ok(())
+    }
+
 }
 
 impl Actor for McpAgentActor {
@@ -83,12 +85,17 @@ impl Actor for McpAgentActor {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpExecutionResult {
+    pub output: String,
+}
+
 // 处理任务
 #[derive(Message)]
 #[rtype(result = "Result<McpExecutionResult, McpError>")]
 pub struct ExecuteMcp {
-    agent_id: String,
-    task_id: String,
+    pub agent_id: AgentId,
+    pub task_id: String,
 }
 
 impl Handler<ExecuteMcp> for McpAgentActor {
@@ -97,10 +104,14 @@ impl Handler<ExecuteMcp> for McpAgentActor {
     fn handle(&mut self, msg: ExecuteMcp, _ctx: &mut Self::Context) -> Self::Result {
         let _mcp_list = self.mcp_list.clone();
         let _prompt = self.prompt.clone();
-        // 占位实现：目前尚未实现具体执行逻辑，返回明确的错误以便编译通过并可逐步完善
         Box::pin(
-            async move { Err(McpError::Message("ExecuteMcp not implemented".into())) }
-                .into_actor(self),
+            async move {
+                // TODO: 分析工具调用
+                // TODO: 实际执行 MCP 的逻辑
+
+                Err(McpError::Message("ExecuteMcp not implemented".into()))
+            }
+            .into_actor(self),
         )
     }
 }

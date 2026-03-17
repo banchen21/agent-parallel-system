@@ -11,7 +11,7 @@ use tracing::{error, info};
 
 use crate::{
     chat::openai_actor::OpenAIProxyActor,
-    mcp::mcp_actor::McpAgentActor,
+    mcp::mcp_actor::{ExecuteMcp, McpAgentActor},
     task::dag_orchestrator::{DagOrchestrator, QueryTaskById},
     workspace::model::AgentId,
 };
@@ -57,15 +57,27 @@ impl AgentActor {
         // 异步工作：注意所有错误都要转换为 `()`
         let work = async move {
             // 查询任务详情（示例），将所有错误转换为 `()`
-            let task_res = dag.send(QueryTaskById(task_id)).await;
-            let _task = match task_res {
-                Ok(Ok(t)) => t,
-                _ => {
-                    tracing::error!("Failed to query task {}", task_id);
-                    return Err(());
-                }
-            };
+            let task_res = dag
+                .send(QueryTaskById(task_id))
+                .await
+                .map_err(|e| {
+                    error!("Failed to send QueryTaskById message: {}", e);
+                })?
+                .map_err(|e| {
+                    error!("Failed to query task by id {}: {}", task_id, e);
+                })?;
 
+            // 获取任务前置条件、参数等信息（示例占位，替换为实际字段）
+            let task_info = task_res; // 假设 task_res 已经是我们需要
+            let mcp_res = mcp_addr
+                .send(ExecuteMcp {
+                    agent_id,
+                    task_id: task_id.to_string(),
+                })
+                .await
+                .map_err(|e| {
+                    error!("Failed to send ExecuteMcp message: {}", e);
+                })?;
             // TODO: 在这里调用 MCP（示例占位，替换为实际消息类型与错误处理）
             // let mcp_res = mcp_addr.send(ExecuteMcp { agent_id: agent_id.to_string(), task_id: task_id.to_string() }).await;
             // match mcp_res {

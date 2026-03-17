@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
 use thiserror::Error;
 
 /// MCP 配置错误类型
@@ -24,15 +24,26 @@ pub enum McpError {
     MailboxError(#[from] actix::MailboxError),
 }
 
-//mcp结构体
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpConfig {
-    // 唯一标识符
-    pub name: String,
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpToolDefinition {
+    pub tool_id: String,
     pub description: String,
-    // 命令 列表，key为命令名称，value为命令参数说明
-    pub commands: Vec<String>,
-    // 命令与参数
-    pub command_args: HashMap<String, Vec<String>>,
-    pub created_at: String,
+    pub parameters: McpParameters,
+    pub options: McpOptions,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct McpParameters {
+    pub r#type: String,
+    pub properties: serde_json::Map<String, Value>,
+    #[serde(default)]
+    pub required: Vec<String>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOptions {
+    pub timeout_ms: u64,
+    pub max_retries: u32,
 }
