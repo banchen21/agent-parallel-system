@@ -205,6 +205,19 @@ impl TaskStatus {
             TaskStatus::Cancelled => "cancelled",
         }
     }
+    // 从数据库字符串解析为 TaskStatus 枚举
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "accepted" => TaskStatus::Accepted,
+            "executing" => TaskStatus::Executing,
+            "submitted" => TaskStatus::Submitted,
+            "under_review" => TaskStatus::Reviewing,
+            "completed_success" => TaskStatus::CompletedSuccess,
+            "completed_failure" => TaskStatus::CompletedFailure,
+            "cancelled" => TaskStatus::Cancelled,
+            _ => TaskStatus::Published,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

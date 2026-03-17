@@ -206,7 +206,6 @@ async fn main() -> Result<()> {
         )
     });
     let agent_manager_actor_clone = agent_manager_actor.clone();
-    AgentManagerActor::spawn_auto_scan_loop(agent_manager_actor_clone);
 
     // 将 DagOrchestrator 从 Option 中解包出来
     let dag_orchestrator = dag_orchestrator_opt.expect("DagOrchestrator 启动失败");
