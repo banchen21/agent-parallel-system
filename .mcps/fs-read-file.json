@@ -1,0 +1,17 @@
+{
+  "toolId": "fs_read_file",
+  "description": "读取工作空间内文本文件内容",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "workspace_name": { "type": "string", "description": "工作空间名称，例如 banchen_default" },
+      "path": { "type": "string", "description": "要读取的相对文件路径" },
+      "max_bytes": { "type": "integer", "description": "最大读取字节数，默认 16384" }
+    },
+    "required": ["path"]
+  },
+  "options": {
+    "timeoutMs": 8000,
+    "maxRetries": 1
+  }
+}

@@ -65,7 +65,13 @@ async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level));
 
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    crate::utils::log_broadcaster::init_broadcaster();
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(crate::utils::log_broadcaster::BroadcastLayer)
+        .init();
 
     info!("正在启动 Agent Parallel System (Actix架构)...");
 
@@ -180,11 +186,14 @@ async fn main() -> Result<()> {
 
     // MCP Agent
     let mcp_agent_prompt = config.mcp_agent.prompt.clone();
-    let mcp_manager = McpAgentActor::new(open_aiproxy_actor.clone(), mcp_agent_prompt).start();
+    let mcp_manager = McpAgentActor::new(pool.clone(), open_aiproxy_actor.clone(), mcp_agent_prompt).start();
 
     // 任务管理
     // 提前声明一个变量，用于将闭包内部创建的 dag_orchestrator 传递到外部
     let mut dag_orchestrator_opt = None;
+    let submitted_recover_scan_interval_secs =
+        config.task_review.submitted_recover_scan_interval_secs;
+    let first_retry_delay_secs = config.task_review.first_retry_delay_secs;
 
     // 使用 Actor::create 解决循环依赖
     let agent_manager_actor = AgentManagerActor::create(|ctx| {
@@ -194,6 +203,8 @@ async fn main() -> Result<()> {
             agent_manager_addr,
             channel_manager.clone(),
             workspace_manage_actor.clone(),
+            submitted_recover_scan_interval_secs,
+            first_retry_delay_secs,
         )
         .start();
         dag_orchestrator_opt = Some(dag_orchestrator.clone());
@@ -220,6 +231,10 @@ async fn main() -> Result<()> {
         task_agent_prompt,
     )
     .start();
+
+    dag_orchestrator.do_send(crate::task::dag_orchestrator::RegisterTaskReviewer {
+        task_agent: task_agent.clone(),
+    });
 
     // 初始化聊天agent
     let chat_agent_prompt = config.chat_agent.prompt.clone();
@@ -295,6 +310,8 @@ async fn main() -> Result<()> {
 fn configure_api_routes(cfg: &mut web::ServiceConfig) {
     // --- 0. WebSocket（不经过 Auth 中间件，通过 URL 参数 token 自行验证）---
     cfg.service(chat::ws_handler::ws_chat_handler);
+    // --- 0b. SSE 日志流（token 查询参数验证）---
+    cfg.service(core::log_handler::log_stream_handler);
 
     // --- 1. 公开作用域：完全没有 wrap(Auth) ---
     cfg.service(
@@ -318,8 +335,10 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(workspace::handler::delete_workspace_handler)
             // 任务（可选，后续打开）
             .service(task::handler::list_tasks_handler)
-            // .service(task::handler::get_task_handler)
+            .service(task::handler::get_task_handler)
+            .service(task::handler::decide_task_review_handler)
             .service(task::handler::create_task_handler)
+            .service(task::handler::delete_task_handler)
             // 智能体相关路由
             .service(agsnets::handler::list_agents_handler)
             .service(agsnets::handler::create_agent_handler), // 如需删除/更新状态，可在此添加对应 handler

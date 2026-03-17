@@ -138,6 +138,77 @@ impl DatabaseManager {
         .execute(&self.pool)
         .await?;
 
+        // 兼容旧库：补齐 tasks 表新增字段与索引
+        sqlx::query(
+            r#"
+            ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS depends_on UUID[] NOT NULL DEFAULT '{}',
+                ADD COLUMN IF NOT EXISTS priority VARCHAR(20) NOT NULL DEFAULT 'medium',
+                ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'published',
+                ADD COLUMN IF NOT EXISTS name VARCHAR(255) NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS workspace_name VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS assigned_agent_id UUID,
+                ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_tasks_workspace_name_created_at
+            ON tasks (workspace_name, created_at DESC);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_tasks_assigned_agent_status_created_at
+            ON tasks (assigned_agent_id, status, created_at DESC);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 创建任务审阅结果表
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS task_reviews (
+                task_id UUID PRIMARY KEY,
+                review_approved BOOLEAN NOT NULL DEFAULT FALSE,
+                review_result TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_task_reviews_task FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 兼容旧库：补齐 task_reviews 表字段
+        sqlx::query(
+            r#"
+            ALTER TABLE task_reviews
+                ADD COLUMN IF NOT EXISTS review_approved BOOLEAN NOT NULL DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS review_result TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_task_reviews_created_at
+            ON task_reviews (created_at DESC);
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // 设置时区
         sqlx::query(
             r#"

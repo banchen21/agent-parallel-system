@@ -17,6 +17,8 @@ pub struct Settings {
     pub chat_agent: ChatAgentConfig,
     pub memory_agent: MemoryAgentConfig,
     pub task_agent: TaskAgentConfig,
+    #[serde(default)]
+    pub task_review: TaskReviewConfig,
     pub llm: LlmConfig,
     #[serde(default)]
     pub providers: Vec<ProviderItem>,
@@ -57,6 +59,21 @@ pub struct MemoryAgentConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskAgentConfig {
     pub prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskReviewConfig {
+    pub submitted_recover_scan_interval_secs: u64,
+    pub first_retry_delay_secs: u64,
+}
+
+impl Default for TaskReviewConfig {
+    fn default() -> Self {
+        Self {
+            submitted_recover_scan_interval_secs: 30,
+            first_retry_delay_secs: 60,
+        }
+    }
 }
 
 /// 单个代理商的静态配置（对应 TOML 中的 [[providers]]）
@@ -106,6 +123,8 @@ impl Settings {
             .set_default("memory_agent.prompt_summary", r#""#)?
             // 从配置文件加载
             .set_default("task_agent.prompt", r#""#)?
+            .set_default("task_review.submitted_recover_scan_interval_secs", 30i64)?
+            .set_default("task_review.first_retry_delay_secs", 60i64)?
             .set_default("llm.default_provider", "")?
             .set_default("llm.timeout_secs", 60i64)?
             .set_default("llm.max_tokens", 2048i64)?

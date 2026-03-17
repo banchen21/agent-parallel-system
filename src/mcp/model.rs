@@ -31,6 +31,8 @@ pub struct McpToolDefinition {
     pub description: String,
     pub parameters: McpParameters,
     pub options: McpOptions,
+    #[serde(default)]
+    pub execution: Option<McpExecutionConfig>,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -46,4 +48,19 @@ pub struct McpParameters {
 pub struct McpOptions {
     pub timeout_ms: u64,
     pub max_retries: u32,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpExecutionConfig {
+    /// 传输类型，当前支持 "http"
+    pub transport: String,
+    /// HTTP endpoint
+    pub endpoint: String,
+    /// HTTP method，默认 POST
+    #[serde(default)]
+    pub method: String,
+    /// 可选固定请求头
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
 }

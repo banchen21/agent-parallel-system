@@ -12,7 +12,9 @@ use tracing::{debug, error, info};
 
 use crate::{
     agsnets::{
-        actor_agent::{ActorLifecycle, AgentActor, GetLifecycle, RunAssignedTaskCheck},
+        actor_agent::{
+            ActorLifecycle, AgentActor, GetRuntimeStatus, RunAssignedTaskCheck,
+        },
         model::AgentError,
     },
     chat::openai_actor::OpenAIProxyActor,
@@ -97,6 +99,11 @@ impl Actor for AgentManagerActor {
                                 id: agent_id,
                                 lifecycle: ActorLifecycle::Starting,
                                 task_id: None,
+                                mcp_inflight_task_id: None,
+                                mcp_last_failed_task_id: None,
+                                mcp_next_retry_at: None,
+                                mcp_consecutive_failures: 0,
+                                mcp_exec_timeout_secs: 60,
                                 running_loop_interval_secs: actor.running_loop_interval_secs,
                                 open_aiproxy_actor: open_ai.clone(),
                                 mcp_agent_actor: mcp.clone(),
@@ -191,6 +198,11 @@ impl Handler<StartAgent> for AgentManagerActor {
             id: msg.agent_id,
             lifecycle: ActorLifecycle::Starting,
             task_id: None,
+            mcp_inflight_task_id: None,
+            mcp_last_failed_task_id: None,
+            mcp_next_retry_at: None,
+            mcp_consecutive_failures: 0,
+            mcp_exec_timeout_secs: 60,
             running_loop_interval_secs: self.running_loop_interval_secs,
             open_aiproxy_actor: self.open_aiproxy_actor.clone(),
             mcp_agent_actor: self.mcp_manager.clone(),
@@ -253,15 +265,20 @@ impl Handler<ListAgents> for AgentManagerActor {
                             // 默认状态为 stopped（数据库存在但未在内存中运行）
                             let mut status = String::from("stopped");
                             if let Some(addr) = agents_map.get(&id) {
-                                // 显式标注 await 的返回类型以帮助类型推断
-                                let lifecycle_res: Result<Result<ActorLifecycle, ()>, actix::MailboxError> = addr.send(GetLifecycle {}).await;
-                                match lifecycle_res {
-                                    Ok(Ok(lc)) => {
-                                        status = match lc {
+                                let runtime_res = addr.send(GetRuntimeStatus {}).await;
+                                match runtime_res {
+                                    Ok(Ok(runtime)) => {
+                                        status = match runtime.lifecycle {
                                             ActorLifecycle::Starting => String::from("starting"),
-                                            ActorLifecycle::Running => String::from("running"),
                                             ActorLifecycle::Stopping => String::from("stopping"),
                                             ActorLifecycle::Stopped => String::from("stopped"),
+                                            ActorLifecycle::Running => {
+                                                if runtime.task_id.is_some() || runtime.mcp_inflight_task_id.is_some() {
+                                                    String::from("working")
+                                                } else {
+                                                    String::from("idle")
+                                                }
+                                            }
                                         }
                                     }
                                     _ => status = String::from("unknown"),
@@ -318,14 +335,16 @@ impl Handler<CheckAvailableAgent> for AgentManagerActor {
 
         Box::pin(
             async move {
-                // 优先尝试在内存中的 AgentActor 中找到处于 Running 状态的实例
+                // 优先尝试在内存中的 AgentActor 中找到真正空闲的实例
                 for (id, addr) in agents_snapshot.into_iter() {
-                    match addr.send(GetLifecycle {}).await {
-                        Ok(Ok(lc)) => {
-                                // 只把处于 Running 的 Actor 视为可用
-                                if matches!(lc, ActorLifecycle::Running) {
-                                    return Ok(id);
-                                }
+                    match addr.send(GetRuntimeStatus {}).await {
+                        Ok(Ok(runtime)) => {
+                            if matches!(runtime.lifecycle, ActorLifecycle::Running)
+                                && runtime.task_id.is_none()
+                                && runtime.mcp_inflight_task_id.is_none()
+                            {
+                                return Ok(id);
+                            }
                         }
                         _ => continue,
                     }

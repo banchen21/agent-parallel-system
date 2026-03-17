@@ -1,0 +1,16 @@
+{
+  "toolId": "system_info",
+  "description": "查询当前系统基础信息，可选返回高 CPU 进程列表",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "include_processes": { "type": "boolean", "description": "是否返回进程列表" },
+      "process_limit": { "type": "integer", "description": "返回进程数量上限，1-100" }
+    },
+    "required": []
+  },
+  "options": {
+    "timeoutMs": 5000,
+    "maxRetries": 1
+  }
+}

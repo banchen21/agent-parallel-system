@@ -74,6 +74,8 @@ pub struct TaskInfoResponse {
     pub due_date: Option<String>,
     pub assigned_agent_id: Option<String>,
     pub assigned_agent_name: Option<String>,
+    pub review_result: Option<String>,
+    pub review_approved: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -106,6 +108,8 @@ impl TaskInfoResponse {
             due_date: None,
             assigned_agent_id: None,
             assigned_agent_name: row.get::<Option<String>, _>("assigned_agent_name"),
+            review_result: row.get::<Option<String>, _>("review_result"),
+            review_approved: row.get::<Option<bool>, _>("review_approved"),
             created_at,
             updated_at: created_at,
         }
