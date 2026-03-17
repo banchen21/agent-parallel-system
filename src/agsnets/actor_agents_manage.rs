@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     agsnets::{
@@ -21,6 +21,7 @@ use crate::{
     workspace::model::{AgentId, AgentInfo, AgentKind},
 };
 
+#[derive(Clone)]
 pub struct AgentManagerActor {
     pool: sqlx::PgPool,
     agents: HashMap<AgentId, Addr<AgentActor>>,
@@ -43,17 +44,17 @@ impl AgentManagerActor {
             dag_orchestrator,
             pool,
         };
-        this
-    }
-
-    pub fn spawn_auto_scan_loop(addr: Addr<AgentManagerActor>) {
+        let this_clone = this.clone();
+        let agents = this.agents.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            
             loop {
-                interval.tick().await;
-                let _ = addr.send(AutoScan {}).await;
+                // 每隔10秒触发一次检查
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                debug!("Auto scan loop triggered: [{:?}]", agents.keys());
             }
         });
+        this
     }
 }
 
@@ -318,57 +319,5 @@ impl Handler<TriggerAgentPoll> for AgentManagerActor {
             }
             .into_actor(self),
         )
-    }
-}
-
-// 自动扫描消息（由后台 loop 发送）
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct AutoScan;
-
-impl Handler<AutoScan> for AgentManagerActor {
-    type Result = ResponseActFuture<Self, ()>;
-    fn handle(&mut self, _msg: AutoScan, _ctx: &mut Self::Context) -> Self::Result {
-        let pool = self.pool.clone();
-
-        // 快照已存在的 agent id
-        let existing_ids: Vec<AgentId> = self.agents.keys().cloned().collect();
-
-        let open_aiproxy = self.open_aiproxy_actor.clone();
-        let mcp = self.mcp_manager.clone();
-        let dag = self.dag_orchestrator.clone();
-
-        let work = async move {
-            match sqlx::query("SELECT id FROM agents").fetch_all(&pool).await {
-                Ok(rows) => rows
-                    .into_iter()
-                    .filter_map(|r| r.try_get::<Uuid, _>("id").ok())
-                    .collect::<Vec<Uuid>>(),
-                Err(e) => {
-                    error!("Failed to fetch agents from db: {}", e);
-                    Vec::new()
-                }
-            }
-        };
-
-        Box::pin(work.into_actor(self).map(move |ids, actor, _ctx| {
-            for id in ids.into_iter() {
-                if !existing_ids.contains(&id) {
-                    let a = AgentActor {
-                        id,
-                        lifecycle: ActorLifecycle::Starting,
-                        task_id: None,
-                        open_aiproxy_actor: open_aiproxy.clone(),
-                        mcp_agent_actor: mcp.clone(),
-                        dag_orchestrator: dag.clone(),
-                        pool: actor.pool.clone(),
-                    };
-
-                    let addr = a.start();
-                    actor.agents.insert(id, addr);
-                    info!("Auto-started AgentActor {}", id);
-                }
-            }
-        }))
     }
 }
