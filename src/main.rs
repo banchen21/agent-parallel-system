@@ -341,6 +341,11 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(task::handler::delete_task_handler)
             // 智能体相关路由
             .service(agsnets::handler::list_agents_handler)
-            .service(agsnets::handler::create_agent_handler), // 如需删除/更新状态，可在此添加对应 handler
+            .service(agsnets::handler::get_agent_provider_options_handler)
+            .service(agsnets::handler::save_agent_provider_options_handler)
+            .service(agsnets::handler::create_agent_handler)
+            .service(agsnets::handler::start_agent_handler)
+            .service(agsnets::handler::stop_agent_handler)
+            .service(agsnets::handler::delete_agent_handler),
     );
 }

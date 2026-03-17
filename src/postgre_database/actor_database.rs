@@ -91,10 +91,23 @@ impl DatabaseManager {
                 id UUID PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
                 kind VARCHAR(50) NOT NULL DEFAULT 'general',
+                provider VARCHAR(100) NOT NULL DEFAULT 'default',
+                model VARCHAR(100) NOT NULL DEFAULT '',
                 workspace_name VARCHAR(255) NOT NULL,
                 owner_username  VARCHAR(50) NOT NULL,
                 CONSTRAINT fk_agents_workspace FOREIGN KEY (workspace_name) REFERENCES workspaces(name) ON DELETE CASCADE
             );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 兼容旧库：补齐 agents 表字段
+        sqlx::query(
+            r#"
+            ALTER TABLE agents
+                ADD COLUMN IF NOT EXISTS provider VARCHAR(100) NOT NULL DEFAULT 'default',
+                ADD COLUMN IF NOT EXISTS model VARCHAR(100) NOT NULL DEFAULT '';
             "#,
         )
         .execute(&self.pool)

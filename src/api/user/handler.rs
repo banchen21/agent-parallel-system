@@ -8,7 +8,7 @@ use actix::Addr;
 use actix_web::{HttpMessage as _, HttpRequest, HttpResponse, Responder, post, web};
 use bcrypt::{DEFAULT_COST, hash, verify};
 use reqwest::header::AUTHORIZATION;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 /// 1. 注册接口
 #[post("/register")]
@@ -63,6 +63,8 @@ pub async fn register(
                             user_name: owner.clone(),
                             name: format!("executor-{}", owner.clone()),
                             kind: AgentKind::General,
+                            provider: "default".to_string(),
+                            model: "".to_string(),
                             workspace_name: workspace_name.clone(),
                             mcp_list: vec![],
                         };

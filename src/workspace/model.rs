@@ -76,6 +76,10 @@ pub struct AgentInfo {
     pub name: String,
     #[serde(default)]
     pub kind: AgentKind,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
     /// 所属工作空间名称（必须为已存在的工作区）
     pub workspace_name: String,
     pub owner_username: String,

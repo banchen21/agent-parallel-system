@@ -7,13 +7,12 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::collections::HashMap;
-use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::{
     agsnets::{
         actor_agent::{
-            ActorLifecycle, AgentActor, GetRuntimeStatus, RunAssignedTaskCheck,
+            ActorLifecycle, AgentActor, GetRuntimeStatus, RunAssignedTaskCheck, ShutdownAgent,
         },
         model::AgentError,
     },
@@ -121,7 +120,7 @@ impl Actor for AgentManagerActor {
         );
     }
 
-    fn stopped(&mut self, ctx: &mut Self::Context) {
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
         info!("AgentManageActor stopped");
     }
 }
@@ -133,6 +132,10 @@ pub struct CreateAgent {
     pub user_name: String,
     pub name: String,
     pub kind: AgentKind,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
     pub workspace_name: String,
     #[serde(default)]
     pub mcp_list: Vec<String>,
@@ -148,13 +151,21 @@ impl Handler<CreateAgent> for AgentManagerActor {
                 let id = Uuid::new_v4();
 
                 let kind_str = msg.kind.as_db_str();
+                let provider = if msg.provider.trim().is_empty() {
+                    String::from("default")
+                } else {
+                    msg.provider.trim().to_string()
+                };
+                let model = msg.model.trim().to_string();
 
                 let res = sqlx::query(
-                    "INSERT INTO agents (id, name, kind, workspace_name, owner_username) VALUES ($1, $2, $3, $4, $5)",
+                    "INSERT INTO agents (id, name, kind, provider, model, workspace_name, owner_username) VALUES ($1, $2, $3, $4, $5, $6, $7)",
                 )
                 .bind(id)
                 .bind(&msg.name)
                 .bind(kind_str)
+                .bind(&provider)
+                .bind(&model)
                 .bind(&msg.workspace_name)
                 .bind(&msg.user_name)
                 .execute(&pool)
@@ -165,6 +176,8 @@ impl Handler<CreateAgent> for AgentManagerActor {
                         id,
                         name: msg.name,
                         kind: msg.kind,
+                        provider,
+                        model,
                         workspace_name: msg.workspace_name,
                         owner_username: msg.user_name,
                         status: String::from("stopped"),
@@ -227,7 +240,55 @@ pub struct StopAgent {
 impl Handler<StopAgent> for AgentManagerActor {
     type Result = ResponseActFuture<Self, Result<(), AgentError>>;
     fn handle(&mut self, msg: StopAgent, _ctx: &mut Self::Context) -> Self::Result {
-        Box::pin(async move { Ok(()) }.into_actor(self))
+        let addr_opt = self.agents.remove(&msg.agent_id);
+        Box::pin(
+            async move {
+                if let Some(addr) = addr_opt {
+                    let _ = addr.send(ShutdownAgent).await;
+                }
+                Ok(())
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+// 删除Agent
+#[derive(Message)]
+#[rtype(result = "Result<(), AgentError>")]
+pub struct DeleteAgent {
+    pub agent_id: AgentId,
+    pub user_name: String,
+}
+
+impl Handler<DeleteAgent> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, Result<(), AgentError>>;
+
+    fn handle(&mut self, msg: DeleteAgent, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+        let addr_opt = self.agents.remove(&msg.agent_id);
+
+        Box::pin(
+            async move {
+                if let Some(addr) = addr_opt {
+                    let _ = addr.send(ShutdownAgent).await;
+                }
+
+                let result = sqlx::query("DELETE FROM agents WHERE id = $1 AND owner_username = $2")
+                    .bind(msg.agent_id)
+                    .bind(msg.user_name)
+                    .execute(&pool)
+                    .await
+                    .map_err(AgentError::DatabaseError)?;
+
+                if result.rows_affected() == 0 {
+                    return Err(AgentError::Message("agent not found or no permission".into()));
+                }
+
+                Ok(())
+            }
+            .into_actor(self),
+        )
     }
 }
 
@@ -247,7 +308,7 @@ impl Handler<ListAgents> for AgentManagerActor {
 
         Box::pin(
             async move {
-                let res = sqlx::query("SELECT id, name, kind, workspace_name, owner_username FROM agents WHERE owner_username = $1")
+                let res = sqlx::query("SELECT id, name, kind, provider, model, workspace_name, owner_username FROM agents WHERE owner_username = $1")
                     .bind(&msg.user_name)
                     .fetch_all(&pool)
                     .await;
@@ -259,6 +320,8 @@ impl Handler<ListAgents> for AgentManagerActor {
                             let id: Uuid = row.try_get("id").map_err(AgentError::DatabaseError)?;
                             let name: String = row.try_get("name").map_err(AgentError::DatabaseError)?;
                             let kind_str: String = row.try_get("kind").map_err(AgentError::DatabaseError)?;
+                            let provider: String = row.try_get("provider").map_err(AgentError::DatabaseError)?;
+                            let model: String = row.try_get("model").map_err(AgentError::DatabaseError)?;
                             let workspace_name: String = row.try_get("workspace_name").map_err(AgentError::DatabaseError)?;
                             let owner_username: String = row.try_get("owner_username").map_err(AgentError::DatabaseError)?;
 
@@ -289,6 +352,8 @@ impl Handler<ListAgents> for AgentManagerActor {
                                 id,
                                 name,
                                 kind: AgentKind::from_db_str(&kind_str),
+                                provider,
+                                model,
                                 workspace_name,
                                 owner_username,
                                 status,

@@ -1,6 +1,6 @@
 use actix::{
-    Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message, ResponseActFuture,
-    WrapFuture,
+    Actor, ActorContext, ActorFutureExt, Addr, AsyncContext, Context, Handler, Message,
+    ResponseActFuture, WrapFuture,
 };
 use uuid::Uuid;
 
@@ -167,6 +167,10 @@ pub struct AgentRuntimeStatus {
 #[rtype(result = "Result<AgentRuntimeStatus, ()>")]
 pub struct GetRuntimeStatus;
 
+#[derive(Message)]
+#[rtype(result = "Result<(), ()>")]
+pub struct ShutdownAgent;
+
 impl Handler<GetLifecycle> for AgentActor {
     type Result = Result<ActorLifecycle, ()>;
     fn handle(&mut self, _msg: GetLifecycle, _ctx: &mut Self::Context) -> Self::Result {
@@ -183,6 +187,16 @@ impl Handler<GetRuntimeStatus> for AgentActor {
             task_id: self.task_id,
             mcp_inflight_task_id: self.mcp_inflight_task_id,
         })
+    }
+}
+
+impl Handler<ShutdownAgent> for AgentActor {
+    type Result = Result<(), ()>;
+
+    fn handle(&mut self, _msg: ShutdownAgent, ctx: &mut Self::Context) -> Self::Result {
+        self.lifecycle = ActorLifecycle::Stopping;
+        ctx.stop();
+        Ok(())
     }
 }
 
