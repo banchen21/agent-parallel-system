@@ -40,7 +40,7 @@ use crate::core::config::CONFIG;
 use crate::core::handler::get_stats_handler;
 use crate::graph_memory::actor_memory::AgentMemoryActor;
 use crate::postgre_database::actor_database::DatabaseManager;
-use crate::task::dag_orchestrator::DagOrchestrator;
+use crate::task::dag_orchestrator::DagOrchestrActor;
 use crate::task::task_agent::TaskAgent;
 use crate::utils::database_util::ensure_database_exists;
 use crate::utils::env_util::env_var_or_default;
@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
     // 使用 Actor::create 解决循环依赖
     let agent_manager_actor = AgentManagerActor::create(|ctx| {
         let agent_manager_addr = ctx.address();
-        let dag_orchestrator = DagOrchestrator::new(
+        let dag_orchestrator = DagOrchestrActor::new(
             pool.clone(),
             agent_manager_addr,
             channel_manager.clone(),
@@ -200,6 +200,7 @@ async fn main() -> Result<()> {
 
         AgentManagerActor::new(
             pool.clone(),
+            config.agents.running_loop_interval_secs,
             open_aiproxy_actor.clone(),
             mcp_manager.clone(),
             dag_orchestrator,

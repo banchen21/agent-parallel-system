@@ -106,8 +106,6 @@ impl Handler<ExecuteMcp> for McpAgentActor {
         let _prompt = self.prompt.clone();
         Box::pin(
             async move {
-                // TODO: 分析工具调用
-                // TODO: 实际执行 MCP 的逻辑
 
                 Err(McpError::Message("ExecuteMcp not implemented".into()))
             }

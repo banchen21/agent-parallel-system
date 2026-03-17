@@ -1,207 +1,156 @@
-```mermaid
-{: id="20260307170031-4pt0vc6"}
+# 工作 Mermaid 流程图
 
-graph TD
-    %% 定义样式
-    classDef layer fill:<span data-type="tag">f9f,stroke:</span>​333,stroke-width:2px;
-    classDef database fill:<span data-type="tag">eee,stroke:</span>​f66,stroke-width:2px,stroke-dasharray: 5 5;
-    classDef agent fill:<span data-type="tag">00ff0022,stroke:</span>​00aa00,stroke-width:2px;
-{: id="20260307170135-zhsi2pd"}
-
-    %% 1. 通道与人格处理层
-    Start((用户消息输入)) --> Channel[通道层 Channel Layer]
-    Channel --> ChatLayer[聊天层交互]
-{: id="20260307170135-upuxvqu"}
-
-    ChatLayer --> CheckPersonality{检索图数据库: 
-是否存在人格数据?}
-{: id="20260307170135-at2mp02"}
-
-    %% 人格设定分支
-    CheckPersonality -- 否 --> AskWho[提出疑问: 我是谁?]
-    AskWho --> SetPersonality[完善 '我是谁' 人格设定]
-    SetPersonality --> UpdateGraph[(图数据库 Graph DB)]
-{: id="20260307170135-buu5kmn"}
-
-    %% 用户识别分支
-    CheckPersonality -- 是 --> IDUser[识别用户并添加至图数据库]
-    IDUser --> UpdateGraph
-{: id="20260307170135-xbkva78"}
-
-    UpdateGraph --> CheckTask{判断是否包含:
-指令/任务/要求?}
-{: id="20260307170135-1igctly"}
-
-    %% 纯聊天分支
-    CheckTask -- 否 --> ChatReply[根据人格设定与图数据库记忆回话]
-    ChatReply --> UserEnd((回复用户))
-{: id="20260307170135-ygq6ae7"}
-
-    %% 2. 任务执行与工作空间层
-    CheckTask -- 是 --> AssignTask[分配任务到系统工作空间]
-{: id="20260307170135-9wtbv9e"}
-
-    subgraph Workspace [System Workspace - 独立 PostgreSQL 存储]
-        AssignTask --> CheckIdle{是否有空闲 Agent?}
-{: id="20260307170135-u7126ce"}
-
-        %% 创建 Agent
-        CheckIdle -- 否 --> CreateAgents[创建三大核心 Agent]
-        CreateAgents --> Sec[书记: 建议/进度]
-        CreateAgents --> Exe[执行者: 直接执行]
-        CreateAgents --> Lead[领袖: 决策/方向]
-{: id="20260307170135-njlrj39"}
-
-        CheckIdle -- 是 --> Dispatch[直接分配给空闲 Agent]
-{: id="20260307170135-1s0e4ch"}
-
-        Sec --> TaskLoop[任务持续进行中]
-        Exe --> TaskLoop
-        Lead --> TaskLoop
-{: id="20260307170135-1lsj0sm"}
-
-        TaskLoop --- PG[(工作空间独立记忆: PostgreSQL)]
-    end
-{: id="20260307170135-ibd8uic"}
-
-    %% 进度查询逻辑
-    ChatLayer -.->|随时查询进度| Sec
-    Sec -.->|反馈当前状态| ChatLayer
-{: id="20260307170135-n8qng6n"}
-
-    %% 完成逻辑
-    TaskLoop --> Completion{领袖 & 书记
-共同确认完成?}
-    Completion -- 否 --> TaskLoop
-    Completion -- 是 --> FinalFeedback[向聊天层进行反馈结果]
-    FinalFeedback --> UserEnd
-{: id="20260307170135-idqc45l"}
-
-    %% 样式指派
-    class Channel,ChatLayer,AssignTask layer;
-    class UpdateGraph,PG database;
-    class Sec,Exe,Lead agent;
-{: id="20260307170135-3tokb1d"}
-
-```
-{: id="20260307170147-p0j08xg"}
-
-这是一个非常清晰且具有逻辑深度的多智能体架构。我为你绘制了对应的 Mermaid 流程图，你可以直接将以下代码复制到 <span data-type="strong">思源笔记</span>、<span data-type="strong">Logseq</span> 或 <span data-type="strong">VS Code</span> 中查看。
-{: id="20260307170218-rh4f7by"}
-
-为了清晰起见，我将整个流程分为 <span data-type="strong">“聊天与人格识别层”</span> 以及 <span data-type="strong">“工作空间任务执行层”</span> 两个部分。
-{: id="20260307170218-pe0x8p5"}
+这份图按当前项目代码实现整理，重点覆盖任务提交、Agent 分配、启动恢复、运行轮询和任务状态流转。
 
 ```mermaid
 graph TD
-    %% 定义样式
-    classDef layer fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef database fill:#eee,stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5;
-    classDef agent fill:#00ff0022,stroke:#00aa00,stroke-width:2px;
+    classDef entry fill:#e8f1ff,stroke:#2a5fb0,stroke-width:2px;
+    classDef actor fill:#eaf7ea,stroke:#2f8f46,stroke-width:2px;
+    classDef db fill:#fff3e6,stroke:#d17b00,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef state fill:#f7ebff,stroke:#7b3fb4,stroke-width:2px;
 
-    %% 1. 通道与人格处理层
-    Start((用户消息输入)) --> Channel[通道层 Channel Layer]
-    Channel --> ChatLayer[聊天层交互]
-    
-    ChatLayer --> CheckPersonality{检索图数据库: <br/>是否存在人格数据?}
-    
-    %% 人格设定分支
-    CheckPersonality -- 否 --> AskWho[提出疑问: 我是谁?]
-    AskWho --> SetPersonality[完善 '我是谁' 人格设定]
-    SetPersonality --> UpdateGraph[(图数据库 Graph DB)]
-    
-    %% 用户识别分支
-    CheckPersonality -- 是 --> IDUser[识别用户并添加至图数据库]
-    IDUser --> UpdateGraph
-    
-    UpdateGraph --> CheckTask{判断是否包含:<br/>指令/任务/要求?}
-    
-    %% 纯聊天分支
-    CheckTask -- 否 --> ChatReply[根据人格设定与图数据库记忆回话]
-    ChatReply --> UserEnd((回复用户))
-    
-    %% 2. 任务执行与工作空间层
-    CheckTask -- 是 --> AssignTask[分配任务到系统工作空间]
-    
-    subgraph Workspace [System Workspace - 独立 PostgreSQL 存储]
-        AssignTask --> CheckIdle{是否有空闲 Agent?}
-        
-        %% 创建 Agent
-        CheckIdle -- 否 --> CreateAgents[创建三大核心 Agent]
-        CreateAgents --> Sec[书记: 建议/进度]
-        CreateAgents --> Exe[执行者: 直接执行]
-        CreateAgents --> Lead[领袖: 决策/方向]
-        
-        CheckIdle -- 是 --> Dispatch[直接分配给空闲 Agent]
-        
-        Sec --> TaskLoop[任务持续进行中]
-        Exe --> TaskLoop
-        Lead --> TaskLoop
-        
-        TaskLoop --- PG[(工作空间独立记忆: PostgreSQL)]
+    User[用户 / API 提交任务]:::entry --> Submit[DagOrchestrator.SubmitTask]:::entry
+    Submit --> InsertPublished[写入 tasks<br/>status = published]:::db
+    InsertPublished --> PickWorkspace{是否找到用户工作区?}:::entry
+
+    PickWorkspace -- 否 --> KeepPublished[记录告警并结束<br/>任务保持 published]:::state
+    PickWorkspace -- 是 --> CheckAgent[询问 AgentManager<br/>CheckAvailableAgent]:::entry
+    CheckAgent --> HasAgent{是否找到可用 Agent?}:::entry
+
+    HasAgent -- 否 --> BindWorkspace[仅写入 workspace_name]:::db
+    BindWorkspace --> WaitAssign[等待后续重新分配]:::state
+
+    HasAgent -- 是 --> StartAgent[StartAgent<br/>启动或复用 AgentActor]:::actor
+    StartAgent --> MarkAccepted[更新 tasks<br/>assigned_agent_id + status = accepted]:::db
+
+    subgraph Runtime [Agent 运行时]
+        AppBoot[系统启动]:::entry --> ScanAgents[AgentManagerActor 启动时扫描 agents 表]:::actor
+        ScanAgents --> RestoreActors[为数据库中的 agent 启动 AgentActor]:::actor
+
+        StartAgent --> ActorStarted[AgentActor.started]:::actor
+        RestoreActors --> ActorStarted
+
+        ActorStarted --> StartupRestore[启动恢复任务]:::actor
+        StartupRestore --> QueryStartup[查询 assigned_agent_id = 当前 agent<br/>status in executing / accepted<br/>优先 executing]:::db
+        QueryStartup --> FoundStartup{是否找到任务?}:::entry
+
+        FoundStartup -- executing --> ResumeExecuting[恢复 task_id<br/>保留 executing]:::state
+        FoundStartup -- accepted --> PromoteStartup[启动阶段把 accepted 提升为 executing]:::state
+        FoundStartup -- 否 --> NoStartupTask[task_id = None]:::state
+
+        ResumeExecuting --> Running[ActorLifecycle = Running]:::actor
+        PromoteStartup --> Running
+        NoStartupTask --> Running
+
+        Running --> Loop[run_interval loop]:::actor
+        Loop --> ManualOrTick[周期触发 / 手动触发<br/>RunAssignedTaskCheck]:::actor
+        ManualOrTick --> QueryAssigned[查询当前 agent 的 accepted / executing 任务]:::db
+        QueryAssigned --> CheckStatus{任务状态}:::entry
+        CheckStatus -- accepted --> PromoteLoop[更新为 executing<br/>并开始执行]:::state
+        CheckStatus -- executing --> ResumeLoop[继续执行中的任务]:::state
+        PromoteLoop --> ExecuteTask[执行任务逻辑<br/>预留 MCP / LLM 接入点]:::actor
+        ResumeLoop --> ExecuteTask
     end
 
-    %% 进度查询逻辑
-    ChatLayer -.->|随时查询进度| Sec
-    Sec -.->|反馈当前状态| ChatLayer
+    ExecuteTask --> TaskStates[任务后续状态流转]:::entry
+    TaskStates --> ExecutingState[executing]:::state
+    ExecutingState --> SubmittedState[submitted]:::state
+    SubmittedState --> ReviewState[under_review]:::state
+    ReviewState --> SuccessState[completed_success]:::state
+    ReviewState --> FailureState[completed_failure]:::state
+    ReviewState --> ReworkState[退回后重新执行]:::state
+    ReworkState --> ExecutingState
 
-    %% 完成逻辑
-    TaskLoop --> Completion{领袖 & 书记<br/>共同确认完成?}
-    Completion -- 否 --> TaskLoop
-    Completion -- 是 --> FinalFeedback[向聊天层进行反馈结果]
-    FinalFeedback --> UserEnd
-
-    %% 样式指派
-    class Channel,ChatLayer,AssignTask layer;
-    class UpdateGraph,PG database;
-    class Sec,Exe,Lead agent;
+    class User,Submit,PickWorkspace,CheckAgent,HasAgent,AppBoot,FoundStartup,CheckStatus,TaskStates entry;
+    class StartAgent,ScanAgents,RestoreActors,ActorStarted,StartupRestore,Running,Loop,ManualOrTick,ExecuteTask actor;
+    class InsertPublished,BindWorkspace,MarkAccepted,QueryStartup,QueryAssigned db;
+    class KeepPublished,WaitAssign,ResumeExecuting,PromoteStartup,NoStartupTask,PromoteLoop,ResumeLoop,ExecutingState,SubmittedState,ReviewState,SuccessState,FailureState,ReworkState state;
 ```
-{: id="20260307170218-f6bksop"}
 
-### 流程逻辑解析：
-{: id="20260307170218-3w2btfy"}
+## 当前实现要点
 
-1. {: id="20260307170218-tlyh23d"}<span data-type="strong">双层架构隔离</span>：
-   {: id="20260307170218-l3u5c85"}
+1. 任务初始写入数据库时状态是 published。
+2. 找到可用 Agent 后，DagOrchestrator 会先确保 AgentActor 已启动，再把任务更新为 accepted。
+3. AgentActor 启动时会优先恢复 executing 任务；如果没有 executing，就会查 accepted，并在启动阶段直接提升为 executing。
+4. Agent 进入 Running 后会进入周期 loop，持续触发 RunAssignedTaskCheck。
+5. loop 中会查询 assigned_agent_id 对应的 accepted 和 executing 任务；accepted 会被推进到 executing。
+6. mcp_agent_actor 和 open_aiproxy_actor 已在 Agent loop 中预留，可继续接入具体执行逻辑。
 
-   - {: id="20260307170218-genw0ms"}<span data-type="strong">聊天层（Chat Layer）</span>：负责情感、人格、记忆检索和用户交互。使用<span data-type="strong">图数据库</span>处理复杂的实体关系（我是谁、你是谁、我们的关系）。
-     {: id="20260307170218-vgr8tbx"}
-   - {: id="20260307170218-nsiv2t7"}<span data-type="strong">工作空间层（Workspace）</span>：负责重逻辑的生产任务。使用 <span data-type="strong">PostgreSQL</span> 存储结构化的任务执行日志和独立记忆。
-     {: id="20260307170218-4ofhl1n"}
-   {: id="20260307170218-07svda2"}
-2. {: id="20260307170218-k2xg2v4"}<span data-type="strong">人格冷启动</span>：
-   {: id="20260307170218-kys8udw"}
+## 和旧图相比的主要修正
 
-   - {: id="20260307170218-u76sk9z"}系统具备“自我意识”检查，如果图数据库中没有定义当前人格，它会通过“我是谁？”的交互完成初始化，这是非常有意思的自演化逻辑。
-     {: id="20260307170218-scu1hw0"}
-   {: id="20260307170218-20eu7lg"}
-3. {: id="20260307170218-a3pv86v"}<span data-type="strong">核心三智能体模型</span>：
-   {: id="20260307170218-xma2ghu"}
+1. 去掉了固定三大核心 Agent 作为主流程，因为当前代码里的 Agent 类型实际是 general、code、research、custom。
+2. 补上了真实的任务状态链路：published → accepted → executing → submitted → under_review → completed_success / completed_failure。
+3. 补上了系统启动恢复逻辑：AgentManager 会扫描 agents 表，把数据库中的 AgentActor 恢复到内存。
+4. 补上了 AgentActor 的启动恢复逻辑和 Running loop，这部分是当前实现里最关键的运行时机制。
 
-   - {: id="20260307170218-gz2pkum"}<span data-type="strong">书记（Secretary）</span>：不仅提供建议，还充当了聊天层与执行层之间的“沟通桥梁”，负责进度汇报。
-     {: id="20260307170218-urp0r9m"}
-   - {: id="20260307170218-pyao0bm"}<span data-type="strong">执行者（Executor）</span>：专注技术实现和任务执行。
-     {: id="20260307170218-lvo8xva"}
-   - {: id="20260307170218-dg2fi4o"}<span data-type="strong">领袖（Leader）</span>：掌握决策权和最终质量闸门。
-     {: id="20260307170218-f4h109s"}
-   {: id="20260307170218-7jz3jzy"}
-4. {: id="20260307170218-dd7cezl"}<span data-type="strong">双重确认机制</span>：
-   {: id="20260307170218-rjvgp66"}
+## MCP 执行计划
 
-   - {: id="20260307170218-0p7cmsb"}任务的结束不是单方面的，而是由<span data-type="strong">领袖（决策位）</span>与<span data-type="strong">书记（审核/记录位）</span>共同判定，确保了任务完成的质量和逻辑闭环。
-     {: id="20260307170218-tmeakyl"}
-   {: id="20260307170218-0x5vy7j"}
-{: id="20260307170218-qw0etpe"}
+### 目标链路
 
-### 如何在你的 Markdown 工具中使用：
-{: id="20260307170218-q4pr1i5"}
+1. AgentActor 发现当前任务需要执行。
+2. AgentActor 发送 ExecuteMcp 给 McpAgentActor。
+3. McpAgentActor 内部完成完整 MCP 流程：
+    - 选工具
+    - 如果没有工具则创建工具
+    - 生成工具参数
+    - 使用工具
+    - 解释工具结果
+    - 返回结构化结果
+4. AgentActor 根据返回结果判断：
+    - 成功
+    - 失败
+    - 是否要重试
+    - 是否推进任务状态
 
-1. {: id="20260307170218-djdqkyl"}安装支持 Mermaid 的编辑器（如 <span data-type="strong">思源笔记</span>）。
-   {: id="20260307170218-8b0gf92"}
-2. {: id="20260307170218-8ok0zd3"}新建一个代码块，语言选择 <span data-type="code">mermaid</span>​。
-   {: id="20260307170218-5cxx4uk"}
-3. {: id="20260307170218-wxky3gf"}粘贴上面的代码，即可看到精美的彩色流程图。
-   {: id="20260307170218-bxzsep1"}
-{: id="20260307170218-a5c85n7"}
+### 职责划分
 
-{: id="20260307170031-mtebxa3" title="工作Mermaid 流程图" type="doc"}
+#### AgentActor
+
+AgentActor 只负责任务调度与任务状态推进，不负责 MCP 内部细节。核心职责如下：
+
+1. 检测当前是否存在可执行任务。
+2. 在任务进入执行阶段后，调用 McpAgentActor。
+3. 接收 McpAgentActor 返回的结构化结果。
+4. 根据结果判断任务是否成功、失败、是否需要重试，以及是否推进到下一个任务状态。
+
+#### McpAgentActor
+
+McpAgentActor 负责完整的 MCP 执行闭环，不把工具执行细节暴露给 AgentActor。核心职责如下：
+
+1. 根据任务内容和上下文选择最合适的工具。
+2. 如果当前没有可用工具，则进入工具创建流程。
+3. 基于任务目标和工具定义生成调用参数。
+4. 实际执行 MCP 工具。
+5. 对工具返回结果进行解释、整理与结构化。
+6. 返回统一的执行结果给 AgentActor。
+
+### 推荐执行链路
+
+AgentActor
+-> ExecuteMcp
+-> McpAgentActor
+-> 选工具
+-> 无工具则创建工具
+-> 生成参数
+-> 执行工具
+-> 解释结果
+-> 返回结构化结果
+-> AgentActor 判定是否成功并推进状态
+
+### 返回结果要求
+
+McpAgentActor 返回结果应尽量结构化，至少要能支持 AgentActor 做以下判断：
+
+1. 本次执行是否成功。
+2. 失败原因是什么。
+3. 是否适合立即重试。
+4. 工具原始输出是什么。
+5. 工具解释后的结果是什么。
+6. 当前任务是否已经达到可提交条件。
+
+### 后续实现顺序
+
+1. 先补全 ExecuteMcp 的请求与响应结构。
+2. 再实现 McpAgentActor 内部的工具选择与工具创建逻辑。
+3. 然后实现参数生成、工具执行、结果解释。
+4. 最后由 AgentActor 基于返回结果接入任务状态推进逻辑。

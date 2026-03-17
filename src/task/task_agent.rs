@@ -10,7 +10,7 @@ use tracing::{debug, error};
 use crate::channel::actor_messages::ResultMessage;
 use crate::chat::model::MessageContent;
 use crate::chat::openai_actor::{CallOpenAI, ChatAgentError, OpenAIProxyActor};
-use crate::task::dag_orchestrator::{DagOrchestrator, SubmitTask};
+use crate::task::dag_orchestrator::{DagOrchestrActor, SubmitTask};
 use crate::task::model::MessageClassificationResponse;
 use crate::utils::json_util::clean_json_string;
 use crate::workspace::workspace_actor::WorkspaceManageActor;
@@ -20,7 +20,7 @@ use crate::workspace::workspace_actor::WorkspaceManageActor;
 pub struct TaskAgent {
     // 工作区
     workspaces: Addr<WorkspaceManageActor>,
-    dag_orchestrator: Addr<DagOrchestrator>,
+    dag_orchestrator: Addr<DagOrchestrActor>,
     open_aiproxy_actor: Addr<OpenAIProxyActor>,
     prompt: String,
 }
@@ -32,7 +32,7 @@ impl Actor for TaskAgent {
 impl TaskAgent {
     pub fn new(
         open_aiproxy_actor: Addr<OpenAIProxyActor>,
-        dag_orchestrator: Addr<DagOrchestrator>,
+        dag_orchestrator: Addr<DagOrchestrActor>,
         workspaces: Addr<WorkspaceManageActor>,
         prompt: String,
     ) -> Self {

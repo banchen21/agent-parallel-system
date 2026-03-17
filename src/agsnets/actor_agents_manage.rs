@@ -17,43 +17,36 @@ use crate::{
     },
     chat::openai_actor::OpenAIProxyActor,
     mcp::mcp_actor::McpAgentActor,
-    task::dag_orchestrator::DagOrchestrator,
+    task::dag_orchestrator::DagOrchestrActor,
     workspace::model::{AgentId, AgentInfo, AgentKind},
 };
 
 #[derive(Clone)]
 pub struct AgentManagerActor {
-    pool: sqlx::PgPool,
-    agents: HashMap<AgentId, Addr<AgentActor>>,
+    pub pool: sqlx::PgPool,
+    pub agents: HashMap<AgentId, Addr<AgentActor>>,
+    running_loop_interval_secs: u64,
     open_aiproxy_actor: Addr<OpenAIProxyActor>,
     mcp_manager: Addr<McpAgentActor>,
-    dag_orchestrator: Addr<DagOrchestrator>,
+    dag_orchestrator: Addr<DagOrchestrActor>,
 }
 
 impl AgentManagerActor {
     pub fn new(
         pool: sqlx::PgPool,
+        running_loop_interval_secs: u64,
         open_aiproxy_actor: Addr<OpenAIProxyActor>,
         mcp_manager: Addr<McpAgentActor>,
-        dag_orchestrator: Addr<DagOrchestrator>,
+        dag_orchestrator: Addr<DagOrchestrActor>,
     ) -> Self {
         let this = AgentManagerActor {
             agents: HashMap::new(),
+            running_loop_interval_secs,
             open_aiproxy_actor,
             mcp_manager,
             dag_orchestrator,
             pool,
         };
-        let this_clone = this.clone();
-        let agents = this.agents.clone();
-        tokio::spawn(async move {
-            
-            loop {
-                // 每隔10秒触发一次检查
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                debug!("Auto scan loop triggered: [{:?}]", agents.keys());
-            }
-        });
         this
     }
 }
@@ -63,6 +56,62 @@ impl Actor for AgentManagerActor {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("AgentManageActor started");
+
+        // 一次性启动扫描：读取表内全部 agents，并全部以 Starting 状态启动
+        let pool = self.pool.clone();
+        let open_ai = self.open_aiproxy_actor.clone();
+        let mcp = self.mcp_manager.clone();
+        let dag = self.dag_orchestrator.clone();
+
+        let work = async move {
+            let rows = sqlx::query(
+                "SELECT id AS agent_id FROM agents ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await;
+
+            match rows {
+                Ok(rows) => {
+                    let mut to_start: Vec<Uuid> = Vec::new();
+                    for row in &rows {
+                        let agent_id: Uuid = row.try_get("agent_id").unwrap();
+                        if !to_start.contains(&agent_id) {
+                            to_start.push(agent_id );
+                        }
+                    }
+                    Ok(to_start)
+                }
+                Err(e) => {
+                    error!("Startup scan: failed to query agents: {}", e);
+                    Ok(Vec::new())
+                }
+            }
+        };
+
+        ctx.spawn(
+            work.into_actor(self).map(
+                move |res: Result<Vec<Uuid>, sqlx::Error>, actor, _ctx| {
+                    if let Ok(to_start) = res {
+                        for agent_id in to_start {
+                            let a = AgentActor {
+                                id: agent_id,
+                                lifecycle: ActorLifecycle::Starting,
+                                task_id: None,
+                                running_loop_interval_secs: actor.running_loop_interval_secs,
+                                open_aiproxy_actor: open_ai.clone(),
+                                mcp_agent_actor: mcp.clone(),
+                                dag_orchestr_actor: dag.clone(),
+                                pool: actor.pool.clone(),
+                            };
+                            let addr = a.start();
+                            actor.agents.insert(agent_id, addr);
+                            info!("Startup: started AgentActor {} with lifecycle=starting", agent_id);
+                        }
+                        info!("Startup scan complete: {} agents loaded", actor.agents.len());
+                    }
+                },
+            ),
+        );
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
@@ -142,9 +191,10 @@ impl Handler<StartAgent> for AgentManagerActor {
             id: msg.agent_id,
             lifecycle: ActorLifecycle::Starting,
             task_id: None,
+            running_loop_interval_secs: self.running_loop_interval_secs,
             open_aiproxy_actor: self.open_aiproxy_actor.clone(),
             mcp_agent_actor: self.mcp_manager.clone(),
-            dag_orchestrator: self.dag_orchestrator.clone(),
+            dag_orchestr_actor: self.dag_orchestrator.clone(),
             pool: self.pool.clone(),
         };
 

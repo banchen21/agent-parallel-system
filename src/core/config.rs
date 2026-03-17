@@ -11,6 +11,7 @@ pub struct Settings {
     pub environment: String,
     pub app_url: String,
     pub limits: LimitsConfig,
+    pub agents: AgentsConfig,
     pub mcp_agent: McpAgentConfig,
     pub features: FeaturesConfig,
     pub chat_agent: ChatAgentConfig,
@@ -30,6 +31,11 @@ pub struct McpAgentConfig {
 pub struct LimitsConfig {
     pub chat_history_limit: i64,
     pub api_history_limit: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentsConfig {
+    pub running_loop_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +99,7 @@ impl Settings {
             // 默认值
             .set_default("limits.chat_history_limit", 10)?
             .set_default("limits.api_history_limit", 20)?
+            .set_default("agents.running_loop_interval_secs", 3i64)?
             .set_default("mcp_agent.prompt", r#""#)?
             .set_default("chat_agent.prompt", r#""#)?
             .set_default("memory_agent.prompt_query", r#""#)?

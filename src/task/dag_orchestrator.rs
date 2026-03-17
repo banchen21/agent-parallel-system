@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct DagOrchestrator {
+pub struct DagOrchestrActor {
     pool: PgPool,
     // Agent 管理器 Actor 地址
     agent_manager_actor: Addr<AgentManagerActor>,
@@ -19,7 +19,7 @@ pub struct DagOrchestrator {
     workspace_manager_actor: Addr<WorkspaceManageActor>,
 }
 
-impl DagOrchestrator {
+impl DagOrchestrActor {
     pub fn new(
         pool: PgPool,
         agent_manager_actor: Addr<AgentManagerActor>,
@@ -72,7 +72,7 @@ impl DagOrchestrator {
 }
 
 // Actor 定义
-impl Actor for DagOrchestrator {
+impl Actor for DagOrchestrActor {
     type Context = Context<Self>;
 }
 
@@ -84,7 +84,7 @@ pub struct SubmitTask {
     pub task: TaskItem,
 }
 
-impl Handler<SubmitTask> for DagOrchestrator {
+impl Handler<SubmitTask> for DagOrchestrActor {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: SubmitTask, _ctx: &mut Self::Context) -> Self::Result {
@@ -204,7 +204,7 @@ pub struct SaveTaskToDb {
     pub task: TaskItem,
 }
 
-impl Handler<SaveTaskToDb> for DagOrchestrator {
+impl Handler<SaveTaskToDb> for DagOrchestrActor {
     type Result = ResponseFuture<Result<uuid::Uuid, anyhow::Error>>;
 
     fn handle(&mut self, msg: SaveTaskToDb, _ctx: &mut Self::Context) -> Self::Result {
@@ -218,7 +218,7 @@ impl Handler<SaveTaskToDb> for DagOrchestrator {
 #[rtype(result = "Result<Vec<TaskInfoResponse>, anyhow::Error>")]
 pub struct QueryAllTasks(pub String);
 
-impl Handler<QueryAllTasks> for DagOrchestrator {
+impl Handler<QueryAllTasks> for DagOrchestrActor {
     type Result = ResponseFuture<Result<Vec<TaskInfoResponse>, anyhow::Error>>;
 
     fn handle(&mut self, msg: QueryAllTasks, _ctx: &mut Self::Context) -> Self::Result {
@@ -245,7 +245,7 @@ impl Handler<QueryAllTasks> for DagOrchestrator {
 #[rtype(result = "Result<TaskInfoResponse, anyhow::Error>")]
 pub struct QueryTaskById(pub uuid::Uuid);
 
-impl Handler<QueryTaskById> for DagOrchestrator {
+impl Handler<QueryTaskById> for DagOrchestrActor {
     type Result = ResponseFuture<Result<TaskInfoResponse, anyhow::Error>>;
 
     fn handle(&mut self, msg: QueryTaskById, _ctx: &mut Self::Context) -> Self::Result {
