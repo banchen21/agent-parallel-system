@@ -12,6 +12,15 @@ pub struct User {
     pub updated_at: DateTime<Local>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct UserPublic {
+    pub id: i32,
+    pub username: String,
+    pub email: Option<String>,
+    pub created_at: DateTime<Local>,
+    pub updated_at: DateTime<Local>,
+}
+
 #[derive(Deserialize)]
 pub struct RegisterRequest {
     pub username: String,

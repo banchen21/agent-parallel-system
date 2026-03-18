@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use config::{Config, ConfigError, Environment, File};
+use rand::{Rng, distributions::Alphanumeric};
+use regex::Regex;
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -10,6 +12,7 @@ pub struct Settings {
     pub app_name: String,
     pub environment: String,
     pub app_url: String,
+    pub security: SecurityConfig,
     pub limits: LimitsConfig,
     pub agents: AgentsConfig,
     pub mcp_agent: McpAgentConfig,
@@ -22,6 +25,11 @@ pub struct Settings {
     pub llm: LlmConfig,
     #[serde(default)]
     pub providers: Vec<ProviderItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecurityConfig {
+    pub super_secret_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,9 +119,11 @@ impl Settings {
 
         // 检查并创建默认配置文件（如果不存在）
         Self::ensure_default_config_exists(default_config_path)?;
+        Self::refresh_runtime_secret(default_config_path)?;
 
         let s = Config::builder()
             // 默认值
+            .set_default("security.super_secret_key", "")?
             .set_default("limits.chat_history_limit", 10)?
             .set_default("limits.api_history_limit", 20)?
             .set_default("agents.running_loop_interval_secs", 3i64)?
@@ -244,6 +254,39 @@ prompt_template = """你的任务是从对话中提取【持久性事实】，�
         }
 
         Ok(())
+    }
+
+    fn refresh_runtime_secret(config_path: &str) -> Result<(), ConfigError> {
+        let content = fs::read_to_string(config_path)
+            .map_err(|e| ConfigError::Message(format!("无法读取配置文件: {}", e)))?;
+        let new_secret = Self::generate_runtime_secret();
+        let secret_line = format!("super_secret_key = \"{}\"", new_secret);
+
+        let updated = if content.contains("[security]") {
+            let re = Regex::new(r#"(?m)^super_secret_key\s*=\s*\".*\"\s*$"#)
+                .map_err(|e| ConfigError::Message(format!("配置正则错误: {}", e)))?;
+            if re.is_match(&content) {
+                re.replace(&content, secret_line.as_str()).to_string()
+            } else {
+                content.replacen("[security]", &format!("[security]\n{}", secret_line), 1)
+            }
+        } else {
+            format!("{}\n\n[security]\n{}\n", content.trim_end(), secret_line)
+        };
+
+        fs::write(config_path, updated)
+            .map_err(|e| ConfigError::Message(format!("无法写入运行时密钥: {}", e)))?;
+
+        info!("已刷新并写入运行时安全密钥到 {}", config_path);
+        Ok(())
+    }
+
+    fn generate_runtime_secret() -> String {
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(48)
+            .map(char::from)
+            .collect()
     }
 }
 

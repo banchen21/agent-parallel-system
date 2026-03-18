@@ -306,6 +306,14 @@ async fn main() -> Result<()> {
 }
 
 fn configure_api_routes(cfg: &mut web::ServiceConfig) {
+    // --- 内置控制台 ---
+    cfg.service(api::console::console_page);
+    cfg.service(api::console::public_endpoints);
+    cfg.service(api::console::verify_console_secret);
+    cfg.service(api::user::handler::console_list_users);
+    cfg.service(api::user::handler::console_create_user);
+    cfg.service(api::user::handler::console_delete_user);
+
     // --- 0. WebSocket（不经过 Auth 中间件，通过 URL 参数 token 自行验证）---
     cfg.service(chat::ws_handler::ws_chat_handler);
     // --- 0b. SSE 日志流（token 查询参数验证）---
@@ -323,6 +331,7 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/v1")
             .wrap(Auth) // 只对 /api/v1 下的路由生效
+            .service(api::user::handler::list_users)
             // 系统资源监控
             .service(get_stats_handler)
             // 聊天：HTTP 历史记录（发送消息已改为 WS 长连接）

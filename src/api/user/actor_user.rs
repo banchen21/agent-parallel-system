@@ -1,9 +1,9 @@
 use actix::{Actor, Context, Handler, Message, ResponseFuture};
 use anyhow::Result;
 use log::info;
-use tracing::{debug, error};
+use tracing::error;
 
-use crate::api::user::model::User;
+use crate::api::user::model::{User, UserPublic};
 
 pub struct UserManagerActor {
     pool: sqlx::PgPool,
@@ -132,6 +132,95 @@ impl Handler<GetUserByRefreshToken> for UserManagerActor {
                     .fetch_optional(&pool)
                     .await?;
             Ok(user)
+        })
+    }
+}
+
+/// 查询用户列表（用于管理页面）
+#[derive(Message)]
+#[rtype(result = "Result<Vec<UserPublic>>")]
+pub struct ListUsers;
+
+impl Handler<ListUsers> for UserManagerActor {
+    type Result = ResponseFuture<Result<Vec<UserPublic>>>;
+
+    fn handle(&mut self, _msg: ListUsers, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+
+        Box::pin(async move {
+            let users = sqlx::query_as::<_, UserPublic>(
+                r#"
+                SELECT id, username, email, created_at, updated_at
+                FROM users
+                ORDER BY id DESC
+                "#,
+            )
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                error!("❌ 查询用户列表失败: {}", e);
+                anyhow::anyhow!("数据库查询失败")
+            })?;
+
+            Ok(users)
+        })
+    }
+}
+
+/// 删除用户及其关联数据（用于内置控制台）
+#[derive(Message)]
+#[rtype(result = "Result<()>")]
+pub struct DeleteUser {
+    pub username: String,
+}
+
+impl Handler<DeleteUser> for UserManagerActor {
+    type Result = ResponseFuture<Result<()>>;
+
+    fn handle(&mut self, msg: DeleteUser, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+
+        Box::pin(async move {
+            let mut tx = pool.begin().await?;
+
+            sqlx::query(
+                r#"
+                DELETE FROM tasks
+                WHERE workspace_name IN (
+                    SELECT name FROM workspaces WHERE owner_username = $1
+                )
+                "#,
+            )
+            .bind(&msg.username)
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query("DELETE FROM agents WHERE owner_username = $1")
+                .bind(&msg.username)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("DELETE FROM workspaces WHERE owner_username = $1")
+                .bind(&msg.username)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("DELETE FROM channel_messages WHERE username = $1")
+                .bind(&msg.username)
+                .execute(&mut *tx)
+                .await?;
+
+            let result = sqlx::query("DELETE FROM users WHERE username = $1")
+                .bind(&msg.username)
+                .execute(&mut *tx)
+                .await?;
+
+            if result.rows_affected() == 0 {
+                return Err(anyhow::anyhow!("用户不存在"));
+            }
+
+            tx.commit().await?;
+            Ok(())
         })
     }
 }

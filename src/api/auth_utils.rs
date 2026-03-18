@@ -1,9 +1,10 @@
 use chrono::{Duration, Local};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
-use log::info;
 use serde::{Deserialize, Serialize};
 
-const SECRET: &[u8] = b"your_super_secret_key"; // TODO: 生产环境请使用环境变量
+use crate::core::config::CONFIG;
+
+pub const CONSOLE_SECRET_HEADER: &str = "X-Console-Secret";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -11,6 +12,14 @@ pub struct Claims {
     pub exp: usize,         // expiration time
     pub iat: usize,         // issued at
     pub token_type: String, // "access" 或 "refresh"
+}
+
+fn secret_bytes() -> &'static [u8] {
+    CONFIG.security.super_secret_key.as_bytes()
+}
+
+pub fn validate_console_secret(secret: &str) -> bool {
+    !secret.is_empty() && secret == CONFIG.security.super_secret_key
 }
 
 pub fn generate_tokens(username: &str) -> (String, String) {
@@ -34,14 +43,14 @@ pub fn generate_tokens(username: &str) -> (String, String) {
     let access_token = encode(
         &Header::default(),
         &access_claims,
-        &EncodingKey::from_secret(SECRET),
+        &EncodingKey::from_secret(secret_bytes()),
     )
     .unwrap();
 
     let refresh_token = encode(
         &Header::default(),
         &refresh_claims,
-        &EncodingKey::from_secret(SECRET),
+        &EncodingKey::from_secret(secret_bytes()),
     )
     .unwrap();
 
@@ -51,7 +60,7 @@ pub fn generate_tokens(username: &str) -> (String, String) {
 pub fn validate_token(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     decode::<Claims>(
         token,
-        &DecodingKey::from_secret(SECRET),
+        &DecodingKey::from_secret(secret_bytes()),
         &Validation::default(),
     )
     .map(|data| data.claims)
