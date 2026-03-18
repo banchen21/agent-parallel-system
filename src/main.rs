@@ -346,6 +346,15 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(agsnets::handler::create_agent_handler)
             .service(agsnets::handler::start_agent_handler)
             .service(agsnets::handler::stop_agent_handler)
-            .service(agsnets::handler::delete_agent_handler),
+            .service(agsnets::handler::delete_agent_handler)
+            // 记忆库 CRUD
+            .service(graph_memory::handler::list_memory_nodes_handler)
+            .service(graph_memory::handler::search_memory_nodes_handler)
+            .service(graph_memory::handler::create_memory_node_handler)
+            .service(graph_memory::handler::update_memory_node_handler)
+            .service(graph_memory::handler::delete_memory_node_handler)
+            .service(graph_memory::handler::list_node_relationships_handler)
+            .service(graph_memory::handler::create_memory_relationship_handler)
+            .service(graph_memory::handler::delete_memory_relationship_handler),
     );
 }

@@ -7,7 +7,7 @@ use async_openai::types::chat::ChatCompletionRequestUserMessageContent;
 use neo4rs::{Graph, query};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::channel::actor_messages::ResultMessage;
 use crate::chat::{
@@ -20,6 +20,28 @@ use crate::graph_memory::neo4j_model::Neo4jOperation;
 use crate::graph_memory::neo4j_model::fetch_all_entities;
 use crate::graph_memory::neo4j_model::format_graph_to_string;
 use crate::utils::json_util::clean_json_string;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryNodeDto {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub metadata: HashMap<String, String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryRelationshipDto {
+    pub id: String,
+    pub source_id: String,
+    pub target_id: String,
+    pub relationship_type: String,
+    pub metadata: HashMap<String, String>,
+    pub created_at: String,
+}
 
 /// 从人格设定中提取的“本我”结构
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -335,6 +357,356 @@ impl Handler<GetMyName> for AgentMemoryActor {
 
     fn handle(&mut self, _msg: GetMyName, _ctx: &mut Self::Context) -> Self::Result {
         self.ai_name.clone()
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<Vec<MemoryNodeDto>, ChatAgentError>")]
+pub struct ListMemoryNodes {
+    pub query: Option<String>,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<MemoryNodeDto, ChatAgentError>")]
+pub struct CreateMemoryNode {
+    pub name: String,
+    pub description: String,
+    pub node_type: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<MemoryNodeDto, ChatAgentError>")]
+pub struct UpdateMemoryNode {
+    pub node_id: i64,
+    pub name: String,
+    pub description: String,
+    pub node_type: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), ChatAgentError>")]
+pub struct DeleteMemoryNode {
+    pub node_id: i64,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<Vec<MemoryRelationshipDto>, ChatAgentError>")]
+pub struct ListNodeRelationships {
+    pub node_id: i64,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<MemoryRelationshipDto, ChatAgentError>")]
+pub struct CreateMemoryRelationship {
+    pub source_id: i64,
+    pub target_id: i64,
+    pub relationship_type: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), ChatAgentError>")]
+pub struct DeleteMemoryRelationship {
+    pub relationship_id: i64,
+}
+
+fn sanitize_relationship_type(raw: &str) -> String {
+    let mut s = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    while s.contains("__") {
+        s = s.replace("__", "_");
+    }
+    s = s.trim_matches('_').to_string();
+    if s.is_empty() {
+        "RELATED_TO".to_string()
+    } else {
+        s
+    }
+}
+
+impl Handler<ListMemoryNodes> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<Vec<MemoryNodeDto>, ChatAgentError>>;
+
+    fn handle(&mut self, msg: ListMemoryNodes, _ctx: &mut Self::Context) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                let mut nodes: Vec<MemoryNodeDto> = Vec::new();
+                if let Some(q) = msg.query.and_then(|s| {
+                    let t = s.trim().to_string();
+                    if t.is_empty() { None } else { Some(t) }
+                }) {
+                    let mut result = graph
+                        .execute(
+                            query(
+                                "MATCH (n) WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($q) OR toLower(coalesce(n.description, '')) CONTAINS toLower($q) RETURN id(n) AS id, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, 'unknown') AS type, coalesce(toString(n.created_at), '') AS created_at, coalesce(toString(n.updated_at), '') AS updated_at ORDER BY id DESC LIMIT 300",
+                            )
+                            .param("q", q),
+                        )
+                        .await?;
+
+                    while let Ok(Some(row)) = result.next().await {
+                        let id: i64 = row.get("id").unwrap_or(0);
+                        let name: String = row.get("name").unwrap_or_default();
+                        let description: String = row.get("description").unwrap_or_default();
+                        let node_type: String = row.get("type").unwrap_or_else(|_| "unknown".to_string());
+                        let created_at: String = row.get("created_at").unwrap_or_default();
+                        let updated_at: String = row.get("updated_at").unwrap_or_default();
+                        nodes.push(MemoryNodeDto {
+                            id: id.to_string(),
+                            name,
+                            description,
+                            node_type,
+                            metadata: HashMap::new(),
+                            created_at,
+                            updated_at,
+                        });
+                    }
+                } else {
+                    let mut result = graph
+                        .execute(query("MATCH (n) RETURN id(n) AS id, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, 'unknown') AS type, coalesce(toString(n.created_at), '') AS created_at, coalesce(toString(n.updated_at), '') AS updated_at ORDER BY id DESC LIMIT 300"))
+                        .await?;
+
+                    while let Ok(Some(row)) = result.next().await {
+                        let id: i64 = row.get("id").unwrap_or(0);
+                        let name: String = row.get("name").unwrap_or_default();
+                        let description: String = row.get("description").unwrap_or_default();
+                        let node_type: String = row.get("type").unwrap_or_else(|_| "unknown".to_string());
+                        let created_at: String = row.get("created_at").unwrap_or_default();
+                        let updated_at: String = row.get("updated_at").unwrap_or_default();
+                        nodes.push(MemoryNodeDto {
+                            id: id.to_string(),
+                            name,
+                            description,
+                            node_type,
+                            metadata: HashMap::new(),
+                            created_at,
+                            updated_at,
+                        });
+                    }
+                }
+
+                Ok(nodes)
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<CreateMemoryNode> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<MemoryNodeDto, ChatAgentError>>;
+
+    fn handle(&mut self, msg: CreateMemoryNode, _ctx: &mut Self::Context) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                let mut result = graph
+                    .execute(
+                        query("CREATE (n:Memory {name: $name, description: $description, type: $type, created_at: datetime(), updated_at: datetime()}) RETURN id(n) AS id, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, 'unknown') AS type, toString(n.created_at) AS created_at, toString(n.updated_at) AS updated_at")
+                            .param("name", msg.name)
+                            .param("description", msg.description)
+                            .param("type", msg.node_type),
+                    )
+                    .await?;
+
+                if let Ok(Some(row)) = result.next().await {
+                    let id: i64 = row.get("id").unwrap_or(0);
+                    let name: String = row.get("name").unwrap_or_default();
+                    let description: String = row.get("description").unwrap_or_default();
+                    let node_type: String = row.get("type").unwrap_or_else(|_| "unknown".to_string());
+                    let created_at: String = row.get("created_at").unwrap_or_default();
+                    let updated_at: String = row.get("updated_at").unwrap_or_default();
+                    Ok(MemoryNodeDto {
+                        id: id.to_string(),
+                        name,
+                        description,
+                        node_type,
+                        metadata: HashMap::new(),
+                        created_at,
+                        updated_at,
+                    })
+                } else {
+                    Err(ChatAgentError::QueryError("创建节点失败".to_string()))
+                }
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<UpdateMemoryNode> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<MemoryNodeDto, ChatAgentError>>;
+
+    fn handle(&mut self, msg: UpdateMemoryNode, _ctx: &mut Self::Context) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                let mut result = graph
+                    .execute(
+                        query("MATCH (n) WHERE id(n) = $id SET n.name = $name, n.description = $description, n.type = $type, n.updated_at = datetime() RETURN id(n) AS id, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, 'unknown') AS type, coalesce(toString(n.created_at), '') AS created_at, toString(n.updated_at) AS updated_at")
+                            .param("id", msg.node_id)
+                            .param("name", msg.name)
+                            .param("description", msg.description)
+                            .param("type", msg.node_type),
+                    )
+                    .await?;
+
+                if let Ok(Some(row)) = result.next().await {
+                    let id: i64 = row.get("id").unwrap_or(0);
+                    let name: String = row.get("name").unwrap_or_default();
+                    let description: String = row.get("description").unwrap_or_default();
+                    let node_type: String = row.get("type").unwrap_or_else(|_| "unknown".to_string());
+                    let created_at: String = row.get("created_at").unwrap_or_default();
+                    let updated_at: String = row.get("updated_at").unwrap_or_default();
+                    Ok(MemoryNodeDto {
+                        id: id.to_string(),
+                        name,
+                        description,
+                        node_type,
+                        metadata: HashMap::new(),
+                        created_at,
+                        updated_at,
+                    })
+                } else {
+                    Err(ChatAgentError::QueryError("节点不存在".to_string()))
+                }
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<DeleteMemoryNode> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<(), ChatAgentError>>;
+
+    fn handle(&mut self, msg: DeleteMemoryNode, _ctx: &mut Self::Context) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                graph
+                    .run(query("MATCH (n) WHERE id(n) = $id DETACH DELETE n").param("id", msg.node_id))
+                    .await?;
+                Ok(())
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<ListNodeRelationships> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<Vec<MemoryRelationshipDto>, ChatAgentError>>;
+
+    fn handle(&mut self, msg: ListNodeRelationships, _ctx: &mut Self::Context) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                let mut result = graph
+                    .execute(
+                        query("MATCH (a)-[r]->(b) WHERE id(a) = $id RETURN id(r) AS id, id(a) AS source_id, id(b) AS target_id, type(r) AS relationship_type, coalesce(toString(r.created_at), '') AS created_at ORDER BY id DESC")
+                            .param("id", msg.node_id),
+                    )
+                    .await?;
+
+                let mut rels = Vec::new();
+                while let Ok(Some(row)) = result.next().await {
+                    let id: i64 = row.get("id").unwrap_or(0);
+                    let source_id: i64 = row.get("source_id").unwrap_or(0);
+                    let target_id: i64 = row.get("target_id").unwrap_or(0);
+                    let relationship_type: String = row.get("relationship_type").unwrap_or_else(|_| "RELATED_TO".to_string());
+                    let created_at: String = row.get("created_at").unwrap_or_default();
+                    rels.push(MemoryRelationshipDto {
+                        id: id.to_string(),
+                        source_id: source_id.to_string(),
+                        target_id: target_id.to_string(),
+                        relationship_type,
+                        metadata: HashMap::new(),
+                        created_at,
+                    });
+                }
+                Ok(rels)
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<CreateMemoryRelationship> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<MemoryRelationshipDto, ChatAgentError>>;
+
+    fn handle(
+        &mut self,
+        msg: CreateMemoryRelationship,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                let rel_type = sanitize_relationship_type(&msg.relationship_type);
+                let cypher = format!(
+                    "MATCH (a), (b) WHERE id(a) = $source_id AND id(b) = $target_id CREATE (a)-[r:{} {{created_at: datetime()}}]->(b) RETURN id(r) AS id, id(a) AS source_id, id(b) AS target_id, type(r) AS relationship_type, toString(r.created_at) AS created_at",
+                    rel_type
+                );
+
+                let mut result = graph
+                    .execute(
+                        query(&cypher)
+                            .param("source_id", msg.source_id)
+                            .param("target_id", msg.target_id),
+                    )
+                    .await?;
+
+                if let Ok(Some(row)) = result.next().await {
+                    let id: i64 = row.get("id").unwrap_or(0);
+                    let source_id: i64 = row.get("source_id").unwrap_or(0);
+                    let target_id: i64 = row.get("target_id").unwrap_or(0);
+                    let relationship_type: String = row.get("relationship_type").unwrap_or_else(|_| "RELATED_TO".to_string());
+                    let created_at: String = row.get("created_at").unwrap_or_default();
+                    Ok(MemoryRelationshipDto {
+                        id: id.to_string(),
+                        source_id: source_id.to_string(),
+                        target_id: target_id.to_string(),
+                        relationship_type,
+                        metadata: HashMap::new(),
+                        created_at,
+                    })
+                } else {
+                    Err(ChatAgentError::QueryError("创建关系失败".to_string()))
+                }
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<DeleteMemoryRelationship> for AgentMemoryActor {
+    type Result = ResponseActFuture<Self, Result<(), ChatAgentError>>;
+
+    fn handle(
+        &mut self,
+        msg: DeleteMemoryRelationship,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        let graph = self.graph.clone();
+        Box::pin(
+            async move {
+                graph
+                    .run(
+                        query("MATCH ()-[r]->() WHERE id(r) = $id DELETE r")
+                            .param("id", msg.relationship_id),
+                    )
+                    .await?;
+                Ok(())
+            }
+            .into_actor(self),
+        )
     }
 }
 
