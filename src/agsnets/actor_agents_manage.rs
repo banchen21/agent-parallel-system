@@ -375,6 +375,82 @@ impl Handler<ListAgents> for AgentManagerActor {
     }
 }
 
+#[derive(Message)]
+#[rtype(result = "Result<AgentInfo, AgentError>")]
+pub struct GetAgentInfo {
+    pub agent_id: AgentId,
+    pub user_name: String,
+}
+
+impl Handler<GetAgentInfo> for AgentManagerActor {
+    type Result = ResponseActFuture<Self, Result<AgentInfo, AgentError>>;
+
+    fn handle(&mut self, msg: GetAgentInfo, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+        let agents_map = self.agents.clone();
+
+        Box::pin(
+            async move {
+                let row = sqlx::query(
+                    "SELECT id, name, kind, provider, model, workspace_name, owner_username FROM agents WHERE id = $1 AND owner_username = $2",
+                )
+                .bind(msg.agent_id)
+                .bind(&msg.user_name)
+                .fetch_optional(&pool)
+                .await
+                .map_err(AgentError::DatabaseError)?;
+
+                let row = match row {
+                    Some(row) => row,
+                    None => return Err(AgentError::Message("agent not found or no permission".into())),
+                };
+
+                let id: Uuid = row.try_get("id").map_err(AgentError::DatabaseError)?;
+                let name: String = row.try_get("name").map_err(AgentError::DatabaseError)?;
+                let kind_str: String = row.try_get("kind").map_err(AgentError::DatabaseError)?;
+                let provider: String = row.try_get("provider").map_err(AgentError::DatabaseError)?;
+                let model: String = row.try_get("model").map_err(AgentError::DatabaseError)?;
+                let workspace_name: String = row.try_get("workspace_name").map_err(AgentError::DatabaseError)?;
+                let owner_username: String = row.try_get("owner_username").map_err(AgentError::DatabaseError)?;
+
+                let mut status = String::from("stopped");
+                if let Some(addr) = agents_map.get(&id) {
+                    match addr.send(GetRuntimeStatus {}).await {
+                        Ok(Ok(runtime)) => {
+                            status = match runtime.lifecycle {
+                                ActorLifecycle::Starting => String::from("starting"),
+                                ActorLifecycle::Stopping => String::from("stopping"),
+                                ActorLifecycle::Stopped => String::from("stopped"),
+                                ActorLifecycle::Running => {
+                                    if runtime.task_id.is_some() || runtime.mcp_inflight_task_id.is_some() {
+                                        String::from("working")
+                                    } else {
+                                        String::from("idle")
+                                    }
+                                }
+                            }
+                        }
+                        _ => status = String::from("unknown"),
+                    }
+                }
+
+                Ok(AgentInfo {
+                    id,
+                    name,
+                    kind: AgentKind::from_db_str(&kind_str),
+                    provider,
+                    model,
+                    workspace_name,
+                    owner_username,
+                    status,
+                    mcp_list: vec![],
+                })
+            }
+            .into_actor(self),
+        )
+    }
+}
+
 // 获取空闲的Agent
 #[derive(Message)]
 #[rtype(result = "Result<AgentId, AgentError>")]

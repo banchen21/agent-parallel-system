@@ -104,7 +104,6 @@ async fn main() -> Result<()> {
             ProviderConfig::new(&item.name, api_key, &item.base_url, &item.default_model)
         };
 
-        let mut iter = config.providers.iter();
         // 确定默认代理商：若 llm.default_provider 非空则以其为准，否则用第一个
         let default_name = if config.llm.default_provider.is_empty() {
             config.providers[0].name.clone()
@@ -331,6 +330,7 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             // 工作空间
             .service(workspace::handler::get_workspace_handler)
             .service(workspace::handler::create_workspac_handler)
+            .service(workspace::handler::update_workspace_handler)
             .service(workspace::handler::delete_workspace_handler)
             // 任务（可选，后续打开）
             .service(task::handler::list_tasks_handler)
@@ -340,6 +340,8 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(task::handler::delete_task_handler)
             // 智能体相关路由
             .service(agsnets::handler::list_agents_handler)
+            .service(agsnets::handler::get_agent_handler)
+            .service(agsnets::handler::list_agent_statuses_handler)
             .service(agsnets::handler::get_agent_provider_options_handler)
             .service(agsnets::handler::save_agent_provider_options_handler)
             .service(agsnets::handler::create_agent_handler)

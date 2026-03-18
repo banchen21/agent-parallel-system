@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
-use std::fs::remove_dir_all;
+use std::fs::{remove_dir_all, rename};
 use tracing::info;
 
 use crate::utils::workspace_path::{ensure_dir, workspace_agents_dir, workspace_dir};
@@ -211,6 +211,183 @@ impl Handler<DeleteWorkspace> for WorkspaceManageActor {
                 res
             }),
         )
+    }
+}
+
+#[derive(Message, Deserialize, Serialize)]
+#[rtype(result = "Result<WorkspaceInfo, WorkspaceError>")]
+pub struct UpdateWorkspace {
+    pub current_name: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub owner_username: String,
+}
+
+impl Handler<UpdateWorkspace> for WorkspaceManageActor {
+    type Result = ResponseActFuture<Self, Result<WorkspaceInfo, WorkspaceError>>;
+
+    fn handle(&mut self, msg: UpdateWorkspace, _ctx: &mut Self::Context) -> Self::Result {
+        let pool = self.pool.clone();
+        let current_name = msg.current_name.clone();
+        let next_name = msg
+            .name
+            .clone()
+            .unwrap_or_else(|| msg.current_name.clone())
+            .trim()
+            .to_string();
+        let next_description = msg.description.clone();
+        let owner_username = msg.owner_username.clone();
+
+        if next_name.is_empty() {
+            return Box::pin(futures::future::err(WorkspaceError::Message(
+                "工作区名称不能为空".to_string(),
+            )));
+        }
+
+        if !next_name.chars().all(|c| c.is_alphabetic() || c == '_') {
+            return Box::pin(futures::future::err(WorkspaceError::Message(
+                "工作区名称只能包含字母和下划线".to_string(),
+            )));
+        }
+
+        let current_name_for_map = current_name.clone();
+        let next_name_for_map = next_name.clone();
+
+        let fut = async move {
+            let mut tx = pool.begin().await.map_err(WorkspaceError::DatabaseError)?;
+
+            let existing = sqlx::query_as::<_, WorkspaceInfo>(
+                r#"
+                SELECT w.id, w.name, w.description, w.owner_username, w.status, w.created_at,
+                    (SELECT COUNT(*) FROM agents a WHERE a.workspace_name = w.name) AS agent_count,
+                    (SELECT COUNT(*) FROM tasks t WHERE t.workspace_name = w.name) AS task_count
+                FROM workspaces w
+                WHERE w.name = $1 AND w.owner_username = $2
+                "#,
+            )
+            .bind(&current_name)
+            .bind(&owner_username)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(WorkspaceError::DatabaseError)?;
+
+            let existing = match existing {
+                Some(workspace) => workspace,
+                None => {
+                    return Err(WorkspaceError::NotFound(format!(
+                        "工作区 '{}' 不存在或无权限",
+                        current_name
+                    )));
+                }
+            };
+
+            if next_name == current_name {
+                let updated = sqlx::query_as::<_, WorkspaceInfo>(
+                    r#"
+                    UPDATE workspaces
+                    SET description = $1
+                    WHERE name = $2 AND owner_username = $3
+                    RETURNING id, name, description, owner_username, status, created_at
+                    "#,
+                )
+                .bind(&next_description)
+                .bind(&current_name)
+                .bind(&owner_username)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(WorkspaceError::DatabaseError)?;
+
+                tx.commit().await.map_err(WorkspaceError::DatabaseError)?;
+                return Ok(WorkspaceInfo {
+                    agent_count: existing.agent_count,
+                    task_count: existing.task_count,
+                    ..updated
+                });
+            }
+
+            let duplicate = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM workspaces WHERE name = $1",
+            )
+            .bind(&next_name)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(WorkspaceError::DatabaseError)?;
+
+            if duplicate > 0 {
+                return Err(WorkspaceError::AlreadyExists(next_name));
+            }
+
+            let inserted = sqlx::query_as::<_, WorkspaceInfo>(
+                r#"
+                INSERT INTO workspaces (name, description, owner_username, status)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id, name, description, owner_username, status, created_at
+                "#,
+            )
+            .bind(&next_name)
+            .bind(&next_description)
+            .bind(&owner_username)
+            .bind(&existing.status)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(WorkspaceError::DatabaseError)?;
+
+            sqlx::query("UPDATE agents SET workspace_name = $1 WHERE workspace_name = $2")
+                .bind(&next_name)
+                .bind(&current_name)
+                .execute(&mut *tx)
+                .await
+                .map_err(WorkspaceError::DatabaseError)?;
+
+            sqlx::query("UPDATE tasks SET workspace_name = $1 WHERE workspace_name = $2")
+                .bind(&next_name)
+                .bind(&current_name)
+                .execute(&mut *tx)
+                .await
+                .map_err(WorkspaceError::DatabaseError)?;
+
+            sqlx::query("DELETE FROM workspaces WHERE name = $1 AND owner_username = $2")
+                .bind(&current_name)
+                .bind(&owner_username)
+                .execute(&mut *tx)
+                .await
+                .map_err(WorkspaceError::DatabaseError)?;
+
+            tx.commit().await.map_err(WorkspaceError::DatabaseError)?;
+
+            let old_dir = workspace_dir(&current_name);
+            let new_dir = workspace_dir(&next_name);
+            if old_dir.exists() && !new_dir.exists() {
+                if let Err(e) = rename(&old_dir, &new_dir) {
+                    tracing::warn!(
+                        workspace = %current_name,
+                        new_workspace = %next_name,
+                        error = %e,
+                        "重命名工作区目录失败（数据库已更新）"
+                    );
+                }
+            } else {
+                let _ = ensure_dir(&new_dir).and_then(|_| ensure_dir(&workspace_agents_dir(&next_name)));
+            }
+
+            Ok(WorkspaceInfo {
+                agent_count: existing.agent_count,
+                task_count: existing.task_count,
+                ..inserted
+            })
+        };
+
+        Box::pin(actix::fut::wrap_future(fut).map(move |res, actor: &mut Self, _ctx| {
+            if res.is_ok() {
+                if current_name_for_map != next_name_for_map {
+                    actor.workspaces.remove(&current_name_for_map);
+                    let addr =
+                        WorkspaceActor::new(actor.pool.clone(), next_name_for_map.clone()).start();
+                    actor.workspaces.insert(next_name_for_map.clone(), addr);
+                }
+            }
+            res
+        }))
     }
 }
 

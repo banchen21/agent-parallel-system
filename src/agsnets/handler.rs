@@ -6,7 +6,8 @@ use std::fs;
 use uuid::Uuid;
 
 use crate::agsnets::actor_agents_manage::{
-    AgentManagerActor, CreateAgent, DeleteAgent, ListAgents, StartAgent, StopAgent,
+    AgentManagerActor, CreateAgent, DeleteAgent, GetAgentInfo, ListAgents, StartAgent,
+    StopAgent,
 };
 
 #[derive(Debug, Serialize)]
@@ -64,6 +65,69 @@ pub async fn list_agents_handler(
 
     match agsnets.send(ListAgents { user_name }).await {
         Ok(Ok(list)) => HttpResponse::Ok().json(list),
+        Ok(Err(e)) => HttpResponse::BadRequest().body(e.to_string()),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[get("/agent/{agent_id}")]
+pub async fn get_agent_handler(
+    path: web::Path<Uuid>,
+    agsnets: web::Data<Addr<AgentManagerActor>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let user_name = match crate::utils::handler_util::get_user_name(&req) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+
+    match agsnets
+        .send(GetAgentInfo {
+            agent_id: path.into_inner(),
+            user_name,
+        })
+        .await
+    {
+        Ok(Ok(agent)) => HttpResponse::Ok().json(agent),
+        Ok(Err(e)) => HttpResponse::BadRequest().body(e.to_string()),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
+#[get("/agents/statuses")]
+pub async fn list_agent_statuses_handler(
+    agsnets: web::Data<Addr<AgentManagerActor>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let user_name = match crate::utils::handler_util::get_user_name(&req) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+
+    match agsnets.send(ListAgents { user_name }).await {
+        Ok(Ok(list)) => {
+            let statuses = list
+                .into_iter()
+                .map(|agent| {
+                    let status_label = match agent.status.as_str() {
+                        "starting" => "启动中",
+                        "working" => "执行中",
+                        "idle" => "空闲中",
+                        "running" => "运行中",
+                        "stopping" => "停止中",
+                        "stopped" => "已停止",
+                        _ => "未知",
+                    };
+                    serde_json::json!({
+                        "agent_id": agent.id,
+                        "name": agent.name,
+                        "status": agent.status,
+                        "status_label": status_label,
+                    })
+                })
+                .collect::<Vec<_>>();
+            HttpResponse::Ok().json(statuses)
+        }
         Ok(Err(e)) => HttpResponse::BadRequest().body(e.to_string()),
         Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
     }

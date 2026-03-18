@@ -1,14 +1,21 @@
 use actix::Addr;
-use actix_web::{HttpMessage, HttpRequest, HttpResponse, Responder, delete, get, post, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, delete, get, post, put, web};
+use serde::Deserialize;
 use serde_json::json;
 use tracing::error;
 
 use crate::{
     utils::handler_util::get_user_name,
     workspace::workspace_actor::{
-        CreateWorkspace, DeleteWorkspace, GetWorkspaces, WorkspaceManageActor,
+        CreateWorkspace, DeleteWorkspace, GetWorkspaces, UpdateWorkspace, WorkspaceManageActor,
     },
 };
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateWorkspaceRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
 
 // 查询
 #[get("/workspace")]
@@ -83,3 +90,30 @@ async fn delete_workspace_handler(
 }
 
 // 更新
+#[put("/workspace/{name}")]
+async fn update_workspace_handler(
+    name: web::Path<String>,
+    update_workspace: web::Json<UpdateWorkspaceRequest>,
+    workspace_manage_actor: web::Data<Addr<WorkspaceManageActor>>,
+    req: HttpRequest,
+) -> impl Responder {
+    let user_name = match get_user_name(&req) {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+
+    let payload = update_workspace.into_inner();
+    match workspace_manage_actor
+        .send(UpdateWorkspace {
+            current_name: name.into_inner(),
+            name: payload.name,
+            description: payload.description,
+            owner_username: user_name,
+        })
+        .await
+    {
+        Ok(Ok(workspace)) => HttpResponse::Ok().json(workspace),
+        Ok(Err(e)) => HttpResponse::BadRequest().body(e.to_string()),
+        Err(e) => HttpResponse::InternalServerError().body(format!("Actor 通信异常: {}", e)),
+    }
+}
