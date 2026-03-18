@@ -447,7 +447,7 @@ impl Handler<ListMemoryNodes> for AgentMemoryActor {
                     let mut result = graph
                         .execute(
                             query(
-                                "MATCH (n) WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($q) OR toLower(coalesce(n.description, '')) CONTAINS toLower($q) RETURN id(n) AS id, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, 'unknown') AS type, coalesce(toString(n.created_at), '') AS created_at, coalesce(toString(n.updated_at), '') AS updated_at ORDER BY id DESC LIMIT 300",
+                                "MATCH (n) WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($q) OR toLower(coalesce(n.description, '')) CONTAINS toLower($q) RETURN id(n) AS id, labels(n) AS labels, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, '') AS type, coalesce(toString(n.created_at), '') AS created_at, coalesce(toString(n.updated_at), '') AS updated_at ORDER BY id DESC LIMIT 300",
                             )
                             .param("q", q),
                         )
@@ -455,9 +455,18 @@ impl Handler<ListMemoryNodes> for AgentMemoryActor {
 
                     while let Ok(Some(row)) = result.next().await {
                         let id: i64 = row.get("id").unwrap_or(0);
+                        let labels: Vec<String> = row.get("labels").unwrap_or_default();
                         let name: String = row.get("name").unwrap_or_default();
                         let description: String = row.get("description").unwrap_or_default();
-                        let node_type: String = row.get("type").unwrap_or_else(|_| "unknown".to_string());
+                        let raw_type: String = row.get("type").unwrap_or_default();
+                        let node_type = if raw_type.trim().is_empty() {
+                            labels
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "unknown".to_string())
+                        } else {
+                            raw_type
+                        };
                         let created_at: String = row.get("created_at").unwrap_or_default();
                         let updated_at: String = row.get("updated_at").unwrap_or_default();
                         nodes.push(MemoryNodeDto {
@@ -472,14 +481,23 @@ impl Handler<ListMemoryNodes> for AgentMemoryActor {
                     }
                 } else {
                     let mut result = graph
-                        .execute(query("MATCH (n) RETURN id(n) AS id, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, 'unknown') AS type, coalesce(toString(n.created_at), '') AS created_at, coalesce(toString(n.updated_at), '') AS updated_at ORDER BY id DESC LIMIT 300"))
+                        .execute(query("MATCH (n) RETURN id(n) AS id, labels(n) AS labels, coalesce(n.name, '') AS name, coalesce(n.description, '') AS description, coalesce(n.type, '') AS type, coalesce(toString(n.created_at), '') AS created_at, coalesce(toString(n.updated_at), '') AS updated_at ORDER BY id DESC LIMIT 300"))
                         .await?;
 
                     while let Ok(Some(row)) = result.next().await {
                         let id: i64 = row.get("id").unwrap_or(0);
+                        let labels: Vec<String> = row.get("labels").unwrap_or_default();
                         let name: String = row.get("name").unwrap_or_default();
                         let description: String = row.get("description").unwrap_or_default();
-                        let node_type: String = row.get("type").unwrap_or_else(|_| "unknown".to_string());
+                        let raw_type: String = row.get("type").unwrap_or_default();
+                        let node_type = if raw_type.trim().is_empty() {
+                            labels
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "unknown".to_string())
+                        } else {
+                            raw_type
+                        };
                         let created_at: String = row.get("created_at").unwrap_or_default();
                         let updated_at: String = row.get("updated_at").unwrap_or_default();
                         nodes.push(MemoryNodeDto {

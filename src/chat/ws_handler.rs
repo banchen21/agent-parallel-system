@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use crate::api::auth_utils::validate_token;
-use crate::channel::actor_messages::{ChannelManagerActor, SaveMessage};
+use crate::channel::actor_messages::{
+    ChannelEvent, ChannelManagerActor, SaveMessage, SubscribeChannelNotify, UnsubscribeChannelNotify,
+};
 use crate::chat::chat_agent::{ChatAgent, OtherUserMessage};
 use crate::chat::model::{MessageContent, UserMessage};
 use crate::graph_memory::actor_memory::{AgentMemoryActor, GetMyName};
@@ -69,6 +71,11 @@ impl Actor for ChatWsSession {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        self.channel_manager.do_send(SubscribeChannelNotify {
+            session_id: self.session_id.clone(),
+            recipient: ctx.address().recipient(),
+        });
+
         info!(user = %self.username, "WS 聊天会话已建立");
         // 每 30 秒发送一次 ping 保持长连接
         ctx.run_interval(std::time::Duration::from_secs(30), |_, ctx| {
@@ -77,6 +84,9 @@ impl Actor for ChatWsSession {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
+        self.channel_manager.do_send(UnsubscribeChannelNotify {
+            session_id: self.session_id.clone(),
+        });
         info!(user = %self.username, "WS 聊天会话已关闭");
     }
 }
@@ -94,17 +104,14 @@ impl Handler<PushText> for ChatWsSession {
     }
 }
 
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct TaskQueueEvent {
-    pub content: String,
-    pub created_at: chrono::DateTime<Utc>,
-}
-
-impl Handler<TaskQueueEvent> for ChatWsSession {
+impl Handler<ChannelEvent> for ChatWsSession {
     type Result = ();
 
-    fn handle(&mut self, msg: TaskQueueEvent, ctx: &mut ws::WebsocketContext<Self>) {
+    fn handle(&mut self, msg: ChannelEvent, ctx: &mut ws::WebsocketContext<Self>) {
+        if msg.user != "任务系统" {
+            return;
+        }
+
         let out = WsOutgoing::TaskProgress {
             sender: "任务系统".to_string(),
             content: msg.content,

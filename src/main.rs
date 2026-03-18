@@ -217,7 +217,6 @@ async fn main() -> Result<()> {
             dag_orchestrator,
         )
     });
-    let agent_manager_actor_clone = agent_manager_actor.clone();
 
     // 将 DagOrchestrator 从 Option 中解包出来
     let dag_orchestrator = dag_orchestrator_opt.expect("DagOrchestrator 启动失败");
@@ -347,6 +346,11 @@ fn configure_api_routes(cfg: &mut web::ServiceConfig) {
             .service(agsnets::handler::start_agent_handler)
             .service(agsnets::handler::stop_agent_handler)
             .service(agsnets::handler::delete_agent_handler)
+            // MCP 自建工具管理
+            .service(mcp::handler::list_mcp_tools_handler)
+            .service(mcp::handler::create_mcp_tool_handler)
+            .service(mcp::handler::update_mcp_tool_handler)
+            .service(mcp::handler::delete_mcp_tool_handler)
             // 记忆库 CRUD
             .service(graph_memory::handler::list_memory_nodes_handler)
             .service(graph_memory::handler::search_memory_nodes_handler)

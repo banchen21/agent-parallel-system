@@ -194,7 +194,7 @@ impl McpAgentActor {
             .unwrap_or(false)
     }
 
-    /// 将 MCP 执行步骤日志写入 `.workspace/<workspace_name>/logs/mcp_flow.log`。
+    /// 将 MCP 执行步骤日志写入 `.workspaces/<workspace_name>/logs/mcp_flow.log`。
     fn append_workspace_log(
         workspace_name: &str,
         agent_id: AgentId,
@@ -254,17 +254,24 @@ impl McpAgentActor {
 
         let mut properties = Map::new();
         properties.insert(
-            "input".to_string(),
+            "command".to_string(),
             json!({
                 "type": "string",
-                "description": "本次任务要传递给工具的输入内容"
+                "description": "要执行的 shell 命令，例如: ls -la"
             }),
         );
         properties.insert(
-            "task_name".to_string(),
+            "cwd".to_string(),
             json!({
                 "type": "string",
-                "description": "任务标题"
+                "description": "命令执行目录（相对工作区），默认 ."
+            }),
+        );
+        properties.insert(
+            "timeout_ms".to_string(),
+            json!({
+                "type": "integer",
+                "description": "命令超时毫秒，范围 500~120000"
             }),
         );
 
@@ -276,13 +283,18 @@ impl McpAgentActor {
             parameters: crate::mcp::model::McpParameters {
                 r#type: "object".to_string(),
                 properties,
-                required: vec!["input".to_string(), "task_name".to_string()],
+                required: vec!["command".to_string()],
             },
             options: crate::mcp::model::McpOptions {
                 timeout_ms: 30_000,
                 max_retries: 1,
             },
-            execution: None,
+            execution: Some(crate::mcp::model::McpExecutionConfig {
+                transport: "builtin".to_string(),
+                endpoint: "terminal_run".to_string(),
+                method: "POST".to_string(),
+                headers: std::collections::HashMap::new(),
+            }),
         }
     }
 
@@ -291,6 +303,14 @@ impl McpAgentActor {
         let path = PathBuf::from(MCPS_DIR).join(format!("{}.json", tool.tool_id));
         let content = serde_json::to_string_pretty(tool)?;
         fs::write(path, content)?;
+        Ok(())
+    }
+
+    fn delete_tool_definition(tool_id: &str) -> Result<(), McpError> {
+        let path = PathBuf::from(MCPS_DIR).join(format!("{}.json", tool_id));
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
         Ok(())
     }
 
@@ -386,7 +406,10 @@ impl McpAgentActor {
         let mut args = Map::new();
 
         for required in &tool.parameters.required {
-            let value = if required.contains("name") {
+            let value = if required.contains("command") {
+                let escaped = task.description.replace('"', "\\\"");
+                Value::String(format!("echo \"{}\"", escaped))
+            } else if required.contains("name") {
                 Value::String(task.name.clone())
             } else if required.contains("workspace") {
                 Value::String(task.workspace_name.clone().unwrap_or_default())
@@ -469,6 +492,9 @@ impl McpAgentActor {
         if let Some(exec) = &tool.execution {
             if exec.transport.eq_ignore_ascii_case("http") {
                 return Self::execute_http_tool(tool, arguments).await;
+            }
+            if exec.transport.eq_ignore_ascii_case("builtin") {
+                return execute_builtin_tool(&exec.endpoint, arguments).await;
             }
             return Err(McpError::Message(format!(
                 "不支持的 transport: {}",
@@ -779,5 +805,85 @@ impl Handler<ExecuteMcp> for McpAgentActor {
                 Err(e) => Err(e),
             }),
         )
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<Vec<McpToolDefinition>, McpError>")]
+pub struct ListMcpTools;
+
+impl Handler<ListMcpTools> for McpAgentActor {
+    type Result = Result<Vec<McpToolDefinition>, McpError>;
+
+    fn handle(&mut self, _msg: ListMcpTools, _ctx: &mut Self::Context) -> Self::Result {
+        let mut tools: Vec<McpToolDefinition> = self.mcp_list.values().cloned().collect();
+        tools.sort_by(|a, b| a.tool_id.cmp(&b.tool_id));
+        Ok(tools)
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<McpToolDefinition, McpError>")]
+pub struct UpsertMcpTool {
+    pub tool: McpToolDefinition,
+}
+
+impl Handler<UpsertMcpTool> for McpAgentActor {
+    type Result = Result<McpToolDefinition, McpError>;
+
+    fn handle(&mut self, msg: UpsertMcpTool, _ctx: &mut Self::Context) -> Self::Result {
+        let mut tool = msg.tool;
+        let sanitized_tool_id = Self::sanitize_tool_id(&tool.tool_id);
+        if sanitized_tool_id.is_empty() {
+            return Err(McpError::Message("tool_id 不能为空".to_string()));
+        }
+
+        tool.tool_id = sanitized_tool_id;
+
+        if tool.parameters.r#type.trim().is_empty() {
+            tool.parameters.r#type = "object".to_string();
+        }
+
+        if tool.options.timeout_ms == 0 {
+            tool.options.timeout_ms = 30_000;
+        }
+
+        if tool.options.max_retries == 0 {
+            tool.options.max_retries = 1;
+        }
+
+        if let Some(exec) = tool.execution.as_mut() {
+            if exec.transport.trim().is_empty() {
+                exec.transport = "http".to_string();
+            }
+            if exec.method.trim().is_empty() {
+                exec.method = "POST".to_string();
+            }
+        }
+
+        Self::persist_tool_definition(&tool)?;
+        self.mcp_list.insert(tool.tool_id.clone(), tool.clone());
+        Ok(tool)
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<(), McpError>")]
+pub struct DeleteMcpTool {
+    pub tool_id: String,
+}
+
+impl Handler<DeleteMcpTool> for McpAgentActor {
+    type Result = Result<(), McpError>;
+
+    fn handle(&mut self, msg: DeleteMcpTool, _ctx: &mut Self::Context) -> Self::Result {
+        let tool_id = Self::sanitize_tool_id(&msg.tool_id);
+        if tool_id.is_empty() {
+            return Err(McpError::Message("tool_id 不能为空".to_string()));
+        }
+
+        Self::delete_tool_definition(&tool_id)?;
+        self.mcp_list.remove(&tool_id);
+        Ok(())
     }
 }

@@ -19,6 +19,7 @@ use crate::{
     chat::openai_actor::OpenAIProxyActor,
     mcp::mcp_actor::McpAgentActor,
     task::dag_orchestrator::DagOrchestrActor,
+    utils::workspace_path::{ensure_dir, workspace_agents_dir},
     workspace::model::{AgentId, AgentInfo, AgentKind},
 };
 
@@ -149,6 +150,10 @@ impl Handler<CreateAgent> for AgentManagerActor {
             async move {
                 // 生成 UUID
                 let id = Uuid::new_v4();
+
+                // 在工作区目录下创建同名智能体目录：.workspaces/<workspace_name>/agents/<agent_name>/
+                let agent_dir = workspace_agents_dir(&msg.workspace_name).join(&msg.name);
+                ensure_dir(&agent_dir)?;
 
                 let kind_str = msg.kind.as_db_str();
                 let provider = if msg.provider.trim().is_empty() {

@@ -1,15 +1,15 @@
-//! 工作区目录约定：`.workspace/<workspace_name>/agents/<agent_id>/`
+//! 工作区目录约定：`.workspaces/<workspace_name>/agents/<agent_id>/`
 //!
-//! 工作区根目录由环境变量 `WORKSPACE_ROOT` 指定，默认为 `.workspace`（相对当前工作目录）。
+//! 工作区根目录由环境变量 `WORKSPACE_ROOT` 指定，默认为 `.workspaces`（相对当前工作目录）。
 
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-/// 工作区根目录（如 `.workspace`），来自环境变量 `WORKSPACE_ROOT`
+/// 工作区根目录（如 `.workspaces`），来自环境变量 `WORKSPACE_ROOT`
 pub fn workspace_root() -> PathBuf {
     std::env::var("WORKSPACE_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(".workspace"))
+    .unwrap_or_else(|_| PathBuf::from(".workspaces"))
 }
 
 /// 某工作区的根路径：`<root>/<workspace_name>/`

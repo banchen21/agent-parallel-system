@@ -139,7 +139,7 @@ impl Handler<CreateWorkspace> for WorkspaceManageActor {
         Box::pin(
             actix::fut::wrap_future(fut).map(move |res, actor: &mut Self, _ctx| match res {
                 Ok(workspace_info) => {
-                    // 在工作区根目录下创建 .workspace/<name>/ 与 .workspace/<name>/agents/
+                    // 在工作区根目录下创建 .workspaces/<name>/ 与 .workspaces/<name>/agents/
                     let ws_dir = workspace_dir(&name_clone);
                     let agents_dir = workspace_agents_dir(&name_clone);
                     if let Err(e) = ensure_dir(&ws_dir).and_then(|_| ensure_dir(&agents_dir)) {

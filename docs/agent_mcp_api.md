@@ -1,220 +1,210 @@
-# 智能体 MCP 管理 API 文档
+# Agent 与 MCP API
 
-## 概述
+本文档描述当前项目里与智能体管理、模型配置、MCP 工具使用相关的实际接口与行为。
 
-本文档描述了智能体 MCP（Model Context Protocol）工具管理的 API 接口。智能体可以通过这些接口添加、删除和查询可用的 MCP 工具。
+## 范围
 
-## 数据库变更
+当前实现将“Agent 管理”和“MCP 工具管理”拆成两组接口：
 
-### agents 表新增字段
+1. Agent 生命周期与模型配置接口
+2. MCP 自建工具 CRUD 接口
 
-```sql
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS mcp_list TEXT[] DEFAULT '{}';
-```
+这两组接口都位于受保护作用域 `/api/v1` 下，需要 Bearer Access Token。
 
-- `mcp_list`: 存储智能体可用的 MCP 工具名称列表（字符串数组）
+## Agent 接口
 
-## API 接口
+### 1. 获取 Agent 列表
 
-所有接口都需要在请求头中携带 JWT Token：
-```
-Authorization: Bearer <your_jwt_token>
-```
+- 方法：`GET`
+- 路径：`/api/v1/agent`
+- 认证：需要
+- 行为：按当前登录用户过滤，只返回该用户工作区下的 Agent
 
-### 1. 创建智能体
+返回字段以 `workspace::model::AgentInfo` 为准：
 
-**接口**: `POST /api/v1/agent`
+- `id`: UUID
+- `name`: Agent 名称
+- `kind`: `general | code | research | custom`
+- `provider`: 使用的模型提供商名称
+- `model`: 模型名
+- `workspace_name`: 所属工作区
+- `owner_username`: 所属用户
+- `status`: `starting | running | stopping | stopped | unknown`
+- `mcp_list`: 当前 Agent 绑定的工具 ID 列表
 
-**请求体**:
+### 2. 创建 Agent
+
+- 方法：`POST`
+- 路径：`/api/v1/agent`
+- 认证：需要
+
+请求体：
+
 ```json
 {
-  "name": "智能体名称",
+  "user_name": "banchen",
+  "name": "executor-banchen",
   "kind": "general",
-  "workspace_name": "工作区名称"
-}
-```
-
-**响应**:
-```json
-{
-  "id": "uuid",
-  "name": "智能体名称",
-  "kind": "general",
-  "workspace_name": "工作区名称",
+  "provider": "default",
+  "model": "",
+  "workspace_name": "banchen_default",
   "mcp_list": []
 }
 ```
 
-### 2. 查询智能体信息
+说明：
 
-**接口**: `GET /api/v1/agent/{agent_id}`
+1. `kind` 支持 `general`、`code`、`research`、`custom`。
+2. 创建时会写入数据库。
+3. 当前实现还会在 `.workspaces/<workspace_name>/agents/<agent_name>/` 下创建对应目录。
 
-**路径参数**:
-- `agent_id`: 智能体的 UUID
+### 3. 启动 Agent
 
-**响应**:
+- 方法：`POST`
+- 路径：`/api/v1/agent/{agent_id}/start`
+- 认证：需要
+
+行为：
+
+1. 启动或复用对应 `AgentActor`
+2. 如果该 Agent 已绑定任务，启动阶段会尝试恢复 `accepted` 或 `executing` 状态的任务
+
+### 4. 停止 Agent
+
+- 方法：`POST`
+- 路径：`/api/v1/agent/{agent_id}/stop`
+- 认证：需要
+
+行为：停止内存中的 Actor，不删除数据库记录。
+
+### 5. 删除 Agent
+
+- 方法：`DELETE`
+- 路径：`/api/v1/agent/{agent_id}`
+- 认证：需要
+
+行为：
+
+1. 校验当前用户权限
+2. 删除 Agent 数据
+3. 释放其运行态
+
+## Provider 配置接口
+
+### 1. 查询可选 Provider
+
+- 方法：`GET`
+- 路径：`/api/v1/agent/provider-options`
+- 认证：需要
+
+返回内容来自 `config/default.toml` 和当前 `Settings`。
+
+### 2. 保存 Provider 配置
+
+- 方法：`POST`
+- 路径：`/api/v1/agent/provider-options`
+- 认证：需要
+
+请求体：
+
 ```json
 {
-  "id": "uuid",
-  "name": "智能体名称",
-  "kind": "general",
-  "workspace_name": "工作区名称",
-  "mcp_list": ["postgres", "filesystem"]
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "token": "sk-xxx",
+  "base_url": "https://api.silra.cn/v1"
 }
 ```
 
-### 3. 为智能体添加 MCP 工具
+行为：
 
-**接口**: `POST /api/v1/agent/{agent_id}/mcp`
+1. 修改 `config/default.toml`
+2. 更新 `[llm].default_provider`
+3. 更新或新增 `[[providers]]` 块
+4. 返回“配置已写入，重启后生效”
 
-**路径参数**:
-- `agent_id`: 智能体的 UUID
+注意：当前实现是直接改配置文件，不是热更新运行中 Actor。
 
-**请求体**:
+## MCP 自建工具接口
+
+### 1. 获取工具列表
+
+- 方法：`GET`
+- 路径：`/api/v1/mcp/tools`
+- 认证：需要
+
+返回值为 `Vec<McpToolDefinition>`。
+
+### 2. 创建工具
+
+- 方法：`POST`
+- 路径：`/api/v1/mcp/tools`
+- 认证：需要
+
+请求体示例：
+
 ```json
 {
-  "mcp_name": "postgres"
+  "toolId": "shell_ls",
+  "description": "列出目录文件",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "要执行的 shell 命令"
+      }
+    },
+    "required": ["command"]
+  },
+  "options": {
+    "timeoutMs": 30000,
+    "maxRetries": 1
+  },
+  "execution": {
+    "transport": "builtin",
+    "endpoint": "terminal_run",
+    "method": "POST",
+    "headers": {}
+  }
 }
 ```
 
-**响应**:
-```json
-{
-  "id": "uuid",
-  "name": "智能体名称",
-  "kind": "general",
-  "workspace_name": "工作区名称",
-  "mcp_list": ["postgres"]
-}
-```
+### 3. 更新工具
 
-**错误响应**:
-- 如果 MCP 已存在：`400 Bad Request - "MCP postgres 已存在于智能体的工具列表中"`
-- 如果智能体不存在：`400 Bad Request - "智能体 {id} 不存在"`
+- 方法：`PUT`
+- 路径：`/api/v1/mcp/tools/{tool_id}`
+- 认证：需要
 
-### 4. 从智能体移除 MCP 工具
+行为：
 
-**接口**: `DELETE /api/v1/agent/{agent_id}/mcp/{mcp_name}`
+1. 路径参数会覆盖请求体中的 `toolId`
+2. 工具定义会写入 `.mcps/<tool_id>.json`
+3. 同步更新内存中的工具注册表
 
-**路径参数**:
-- `agent_id`: 智能体的 UUID
-- `mcp_name`: MCP 工具名称
+### 4. 删除工具
 
-**响应**:
-```json
-{
-  "id": "uuid",
-  "name": "智能体名称",
-  "kind": "general",
-  "workspace_name": "工作区名称",
-  "mcp_list": []
-}
-```
+- 方法：`DELETE`
+- 路径：`/api/v1/mcp/tools/{tool_id}`
+- 认证：需要
 
-## 使用示例
+行为：
 
-### 示例 1: 创建智能体并添加 MCP 工具
+1. 删除 `.mcps/<tool_id>.json`
+2. 从内存工具列表移除
 
-```bash
-# 1. 创建智能体
-curl -X POST http://localhost:8000/api/v1/agent \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "数据分析助手",
-    "kind": "general",
-    "workspace_name": "myworkspace"
-  }'
+## Agent 与 MCP 的运行关系
 
-# 响应: {"id": "123e4567-e89b-12d3-a456-426614174000", ...}
+当前代码中的关系如下：
 
-# 2. 为智能体添加 postgres MCP 工具
-curl -X POST http://localhost:8000/api/v1/agent/123e4567-e89b-12d3-a456-426614174000/mcp \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mcp_name": "postgres"
-  }'
+1. Agent 发现自己有 `accepted` 或 `executing` 任务
+2. Agent 调用 `McpAgentActor.ExecuteMcp`
+3. MCP Actor 选择工具、补参数、执行工具、解释结果
+4. 返回结构化结果给 Agent
+5. Agent 根据 `success` 和 `should_retry` 推进任务状态
 
-# 3. 再添加 filesystem MCP 工具
-curl -X POST http://localhost:8000/api/v1/agent/123e4567-e89b-12d3-a456-426614174000/mcp \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "mcp_name": "filesystem"
-  }'
-```
+重点：
 
-### 示例 2: 查询智能体的 MCP 工具列表
-
-```bash
-curl -X GET http://localhost:8000/api/v1/agent/123e4567-e89b-12d3-a456-426614174000 \
-  -H "Authorization: Bearer YOUR_TOKEN"
-
-# 响应:
-# {
-#   "id": "123e4567-e89b-12d3-a456-426614174000",
-#   "name": "数据分析助手",
-#   "kind": "general",
-#   "workspace_name": "myworkspace",
-#   "mcp_list": ["postgres", "filesystem"]
-# }
-```
-
-### 示例 3: 移除 MCP 工具
-
-```bash
-curl -X DELETE http://localhost:8000/api/v1/agent/123e4567-e89b-12d3-a456-426614174000/mcp/postgres \
-  -H "Authorization: Bearer YOUR_TOKEN"
-
-# 响应:
-# {
-#   "id": "123e4567-e89b-12d3-a456-426614174000",
-#   "name": "数据分析助手",
-#   "kind": "general",
-#   "workspace_name": "myworkspace",
-#   "mcp_list": ["filesystem"]
-# }
-```
-
-## 常见 MCP 工具
-
-根据 `.roo/mcp.json` 配置，系统支持以下 MCP 工具：
-
-- `postgres`: PostgreSQL 数据库操作工具
-- `Apifox 开放 API - API 文档`: Apifox API 文档工具
-
-智能体可以根据需要添加这些工具来扩展其能力。
-
-## 注意事项
-
-1. **MCP 工具名称必须与 `.roo/mcp.json` 中配置的名称一致**
-2. 添加重复的 MCP 工具会返回错误
-3. 移除不存在的 MCP 工具不会报错，会静默处理
-4. 智能体的 MCP 列表存储在数据库中，重启后会保持
-5. 所有接口都需要认证，未认证的请求会返回 401 错误
-
-## 架构说明
-
-### Actor 模式
-
-系统使用 Actix Actor 模式管理智能体和 MCP 工具：
-
-- **AgentActor**: 管理所有智能体的状态和操作
-- **消息类型**:
-  - `CreateAgent`: 创建新智能体
-  - `GetAgentInfo`: 查询智能体信息
-  - `AddMcpToAgent`: 为智能体添加 MCP 工具
-  - `RemoveMcpFromAgent`: 从智能体移除 MCP 工具
-
-### 数据流
-
-```
-HTTP Request → Handler → AgentActor → Database → Response
-```
-
-1. HTTP 请求到达 handler
-2. Handler 将请求转换为 Actor 消息
-3. AgentActor 处理消息并操作数据库
-4. 返回结果给 handler
-5. Handler 将结果转换为 HTTP 响应
+1. 直接执行失败且不可重试时，任务会直接落到 `completed_failure`
+2. 执行成功时，任务进入 `submitted`，后续再进入审阅链路
+3. 自动生成工具现在默认具备可执行配置，不再只是定义文件
